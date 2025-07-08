@@ -204,23 +204,23 @@ jobs:
                   
                   # Create summary file for easy access
                   $summaryContent = @"
-Zed Editor Build Summary
-========================
-Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-Build Duration: $($buildDuration.ToString('hh\:mm\:ss'))
-File Size: $([math]::Round($fileSize/1MB, 2)) MB
-Download Link: $($uploadResult.link)
-Expiry: $($uploadResult.expiry)
-File Key: $($uploadResult.key)
-
-Instructions:
-1. Click the download link above
-2. The file will be deleted after download (one-time use)
-3. Link expires in 7 days
-4. File is automatically deleted after expiry
-
-Build completed successfully!
-"@
+        Zed Editor Build Summary
+        ========================
+        Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        Build Duration: $($buildDuration.ToString('hh\:mm\:ss'))
+        File Size: $([math]::Round($fileSize/1MB, 2)) MB
+        Download Link: $($uploadResult.link)
+        Expiry: $($uploadResult.expiry)
+        File Key: $($uploadResult.key)
+        
+        Instructions:
+        1. Click the download link above
+        2. The file will be deleted after download (one-time use)
+        3. Link expires in 7 days
+        4. File is automatically deleted after expiry
+        
+        Build completed successfully!
+        "@
                   
                   $summaryContent | Out-File -FilePath "build-summary.txt" -Encoding UTF8
                   Write-Log "Build summary saved to build-summary.txt"
