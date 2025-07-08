@@ -55,26 +55,42 @@ jobs:
             Write-Log "=== Starting Zed Build Process ==="
             Write-Log "Working directory: $(Get-Location)"
             
+            # Configure git for long paths FIRST
+            Write-Log "Configuring git for long paths..."
+            git config --global core.longpaths true
+            Write-Log "Git longpaths configured"
+            
+            # Install Visual Studio Build Tools (required for Rust compilation on Windows)
+            Write-Log "Installing Visual Studio Build Tools..."
+            choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --includeOptional --passive --locale en-US" -y
+            Write-Log "Visual Studio Build Tools installed"
+            
             Write-Log "Installing CMake..."
-            $cmakeResult = choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y 2>&1
-            Write-Log "CMake installation output: $cmakeResult"
+            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+            Write-Log "CMake installed"
             
             Write-Log "Installing Rustup..."
-            $rustupResult = choco install rustup.install -y 2>&1
-            Write-Log "Rustup installation output: $rustupResult"
+            choco install rustup.install -y
+            Write-Log "Rustup installed"
             
-            Write-Log "Refreshing environment..."
-            refreshenv
+            # Refresh PATH manually since refreshenv doesn't work in jobs
+            Write-Log "Refreshing PATH environment..."
+            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+            Write-Log "PATH refreshed"
             
+            # Initialize Rust toolchain
             Write-Log "Initializing Rust toolchain..."
-            $rustInitResult = rustup default stable 2>&1
-            Write-Log "Rust initialization output: $rustInitResult"
+            & "${env:USERPROFILE}\.cargo\bin\rustup.exe" default stable
+            Write-Log "Rust toolchain initialized"
+            
+            # Add Rust to PATH for this session
+            $env:PATH = "${env:USERPROFILE}\.cargo\bin;$env:PATH"
             
             Write-Log "Verifying installations..."
-            $cmakeVersion = cmake --version 2>&1
-            $rustupVersion = rustup --version 2>&1
-            $cargoVersion = cargo --version 2>&1
-            $rustcVersion = rustc --version 2>&1
+            $cmakeVersion = & cmake --version 2>&1
+            $rustupVersion = & "${env:USERPROFILE}\.cargo\bin\rustup.exe" --version 2>&1
+            $cargoVersion = & "${env:USERPROFILE}\.cargo\bin\cargo.exe" --version 2>&1
+            $rustcVersion = & "${env:USERPROFILE}\.cargo\bin\rustc.exe" --version 2>&1
             
             Write-Log "CMake version: $cmakeVersion"
             Write-Log "Rustup version: $rustupVersion"
@@ -90,15 +106,24 @@ jobs:
               Set-Location "zed"
               Write-Log "Changed to zed directory: $(Get-Location)"
               
+              # Set environment variables for Windows build
+              $env:RUSTFLAGS = "-C target-feature=+crt-static"
+              $env:CARGO_TARGET_DIR = "target"
+              
               Write-Log "=== Starting Cargo Build Process ==="
               Write-Log "This may take 1-2 hours... Please be patient!"
               
-              # Run cargo build with full output capture
-              $cargoResult = cargo run --release 2>&1
+              # Use cargo build instead of cargo run
+              $cargoResult = & "${env:USERPROFILE}\.cargo\bin\cargo.exe" build --release 2>&1
               Write-Log "Cargo build output: $cargoResult"
               
               if ($LASTEXITCODE -eq 0) {
                 Write-Log "=== BUILD SUCCESSFUL ==="
+                Write-Log "Build artifacts location: $(Get-Location)\target\release\"
+                
+                # List built executables
+                $builtFiles = Get-ChildItem -Path "target\release\" -Filter "*.exe" | Select-Object -ExpandProperty Name
+                Write-Log "Built executables: $($builtFiles -join ', ')"
               } else {
                 Write-Log "=== BUILD FAILED with exit code: $LASTEXITCODE ==="
               }
