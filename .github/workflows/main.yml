@@ -34,44 +34,131 @@ jobs:
         Start-Sleep -Seconds 10
         Write-Host "RDP tunnel should be available now!"
         
-        # Start the build process in background
-        $buildJob = Start-Job -ScriptBlock {
-          Set-Location $args[0]
-          refreshenv
-          Write-Host "Starting dependency installation..."
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-          choco install rustup.install -y
-          refreshenv
-          rustup default stable
-          
-          Write-Host "Verifying installations..."
-          cmake --version
-          rustup --version
-          cargo --version
-          rustc --version
-          
-          Write-Host "Cloning Zed repository..."
-          git clone https://github.com/zed-industries/zed.git
-          cd zed
-          
-          Write-Host "Starting build process... This may take 1-2 hours"
-          cargo run --release
-          
-          Write-Host "Build completed!"
-        } -ArgumentList (Get-Location)
+        # Create log file
+        $logFile = "build-log.txt"
         
-        # Keep checking build status and keep ngrok alive
-        Write-Host "Monitoring build progress..."
+        # Start the build process in background with full logging
+        $buildJob = Start-Job -ScriptBlock {
+          param($workDir, $logFile)
+          Set-Location $workDir
+          
+          # Function to log with timestamp
+          function Write-Log {
+            param([string]$message)
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            $logMessage = "[$timestamp] $message"
+            Write-Host $logMessage
+            Add-Content -Path $logFile -Value $logMessage
+          }
+          
+          try {
+            Write-Log "=== Starting Zed Build Process ==="
+            Write-Log "Working directory: $(Get-Location)"
+            
+            Write-Log "Installing CMake..."
+            $cmakeResult = choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y 2>&1
+            Write-Log "CMake installation output: $cmakeResult"
+            
+            Write-Log "Installing Rustup..."
+            $rustupResult = choco install rustup.install -y 2>&1
+            Write-Log "Rustup installation output: $rustupResult"
+            
+            Write-Log "Refreshing environment..."
+            refreshenv
+            
+            Write-Log "Initializing Rust toolchain..."
+            $rustInitResult = rustup default stable 2>&1
+            Write-Log "Rust initialization output: $rustInitResult"
+            
+            Write-Log "Verifying installations..."
+            $cmakeVersion = cmake --version 2>&1
+            $rustupVersion = rustup --version 2>&1
+            $cargoVersion = cargo --version 2>&1
+            $rustcVersion = rustc --version 2>&1
+            
+            Write-Log "CMake version: $cmakeVersion"
+            Write-Log "Rustup version: $rustupVersion"
+            Write-Log "Cargo version: $cargoVersion"
+            Write-Log "Rustc version: $rustcVersion"
+            
+            Write-Log "Cloning Zed repository..."
+            $cloneResult = git clone https://github.com/zed-industries/zed.git 2>&1
+            Write-Log "Git clone output: $cloneResult"
+            
+            if (Test-Path "zed") {
+              Write-Log "Successfully cloned Zed repository"
+              Set-Location "zed"
+              Write-Log "Changed to zed directory: $(Get-Location)"
+              
+              Write-Log "=== Starting Cargo Build Process ==="
+              Write-Log "This may take 1-2 hours... Please be patient!"
+              
+              # Run cargo build with full output capture
+              $cargoResult = cargo run --release 2>&1
+              Write-Log "Cargo build output: $cargoResult"
+              
+              if ($LASTEXITCODE -eq 0) {
+                Write-Log "=== BUILD SUCCESSFUL ==="
+              } else {
+                Write-Log "=== BUILD FAILED with exit code: $LASTEXITCODE ==="
+              }
+            } else {
+              Write-Log "ERROR: Failed to clone Zed repository"
+            }
+            
+          } catch {
+            Write-Log "ERROR: Exception occurred: $($_.Exception.Message)"
+            Write-Log "Stack trace: $($_.Exception.StackTrace)"
+          }
+          
+          Write-Log "=== Build Process Completed ==="
+        } -ArgumentList (Get-Location), $logFile
+        
+        # Keep monitoring build status and maintain RDP tunnel
+        Write-Host "=== Build started in background ==="
+        Write-Host "RDP tunnel will remain active throughout the process"
+        Write-Host "You can connect via RDP to monitor progress in real-time"
+        Write-Host "Log file: build-log.txt"
+        
+        $startTime = Get-Date
         while ($buildJob.State -eq "Running") {
           Start-Sleep -Seconds 30
-          Write-Host "Build still running... RDP tunnel active"
+          $elapsed = (Get-Date) - $startTime
+          Write-Host "Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active"
+          
+          # Show recent log entries if log file exists
+          if (Test-Path $logFile) {
+            $recentLogs = Get-Content $logFile -Tail 3
+            if ($recentLogs) {
+              Write-Host "Recent log entries:"
+              $recentLogs | ForEach-Object { Write-Host "  $_" }
+            }
+          }
         }
         
-        # Get build results
-        $buildOutput = Receive-Job -Job $buildJob
-        Write-Host "Build Output:"
+        # Get final build results
+        Write-Host "=== Build job completed ==="
+        $buildOutput = Receive-Job -Job $buildJob -Wait
+        Write-Host "Final build output:"
         Write-Host $buildOutput
         
-        # Keep tunnel alive for additional time after build
-        Write-Host "Build finished! Keeping RDP tunnel active for 30 more minutes..."
-        Start-Sleep -Seconds 1800
+        # Display final log summary
+        if (Test-Path $logFile) {
+          Write-Host "=== Final Log Summary ==="
+          $logContent = Get-Content $logFile
+          Write-Host "Total log lines: $($logContent.Count)"
+          Write-Host "Last 10 log entries:"
+          $logContent | Select-Object -Last 10 | ForEach-Object { Write-Host "  $_" }
+        }
+        
+        # Keep RDP tunnel active indefinitely (or until GitHub Actions timeout)
+        Write-Host "=== Build process finished ==="
+        Write-Host "RDP tunnel will remain active until workflow timeout"
+        Write-Host "You can connect to review build results, logs, and built files"
+        Write-Host "Entering infinite loop to keep tunnel alive..."
+        
+        # Infinite loop to keep RDP active
+        while ($true) {
+          Start-Sleep -Seconds 60
+          Write-Host "RDP tunnel still active... $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        }
