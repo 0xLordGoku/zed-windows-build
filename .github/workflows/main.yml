@@ -28,6 +28,7 @@ jobs:
     
     # Start ngrok tunnel and build process
     - name: Create Tunnel and Run Build
+      id: build
       run: |
         # Start ngrok tunnel in background
         Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden
@@ -225,9 +226,9 @@ Build completed successfully!
                   Write-Log "Build summary saved to build-summary.txt"
                   
                   # Set GitHub Actions output for potential use in notifications
-                  Write-Host "::set-output name=download_link::$($uploadResult.link)"
-                  Write-Host "::set-output name=file_size::$([math]::Round($fileSize/1MB, 2)) MB"
-                  Write-Host "::set-output name=build_duration::$($buildDuration.ToString('hh\:mm\:ss'))"
+                  echo "download_link=$($uploadResult.link)" >> $env:GITHUB_OUTPUT
+                  echo "file_size=$([math]::Round($fileSize/1MB, 2)) MB" >> $env:GITHUB_OUTPUT
+                  echo "build_duration=$($buildDuration.ToString('hh\:mm\:ss'))" >> $env:GITHUB_OUTPUT
                   
                 } else {
                   Write-Log "=== UPLOAD FAILED ==="
@@ -280,33 +281,43 @@ Build completed successfully!
         
         Write-Host "Workflow completed. RDP tunnel closing."
     
-    # Send email notification using GitHub Actions
-    - name: Send Email Notification
+    # Create GitHub Issue with download link (simpler than email)
+    - name: Create Issue with Download Link
       if: always()
-      uses: dawidd6/action-send-mail@v3
+      uses: actions/github-script@v7
       with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: "Zed Build Completed - ${{ job.status }}"
-        body: |
-          Zed Editor Build Status: ${{ job.status }}
+        script: |
+          const buildStatus = '${{ job.status }}';
+          const downloadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no download link';
+          const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
+          const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
           
-          Repository: ${{ github.repository }}
-          Commit: ${{ github.sha }}
-          Branch: ${{ github.ref }}
+          const issueBody = `
+          ## Zed Editor Build Completed
           
-          Build Duration: ${{ steps.build.outputs.build_duration }}
-          File Size: ${{ steps.build.outputs.file_size }}
+          **Status:** ${buildStatus}
+          **Build Duration:** ${buildDuration}
+          **File Size:** ${fileSize}
           
-          Download Link: ${{ steps.build.outputs.download_link }}
+          ### Download Link
+          ${downloadLink}
           
-          Note: 
+          ### Important Notes
           - Link expires in 7 days
-          - File is deleted after first download
-          - This is a one-time use link
+          - File is deleted after first download (one-time use)
+          - This is a temporary hosting link
           
-          Build logs are available in the GitHub Actions run.
-        to: YOUR_EMAIL@example.com
-        from: GitHub Actions <noreply@github.com>
+          ### Build Details
+          - Repository: ${{ github.repository }}
+          - Commit: ${{ github.sha }}
+          - Branch: ${{ github.ref }}
+          - Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          `;
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `Zed Build ${buildStatus} - ${new Date().toLocaleDateString()}`,
+            body: issueBody,
+            labels: ['build-notification', buildStatus.toLowerCase()]
+          });
