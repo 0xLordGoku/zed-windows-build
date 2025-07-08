@@ -26,7 +26,7 @@ jobs:
     - name: Reset runneradmin Password
       run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
     
-    # Start ngrok tunnel in background
+    # Start ngrok tunnel and build process
     - name: Create Tunnel and Run Build
       run: |
         # Start ngrok tunnel in background
@@ -34,232 +34,279 @@ jobs:
         Start-Sleep -Seconds 10
         Write-Host "RDP tunnel should be available now!"
         
-        # Create log file
-        $logFile = "build-log.txt"
+        # Function to log with timestamp (available in main scope)
+        function Write-Log {
+          param([string]$message)
+          $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+          $logMessage = "[$timestamp] $message"
+          Write-Host $logMessage
+        }
         
-        # Start the build process in background with full logging
-        $buildJob = Start-Job -ScriptBlock {
-          param($workDir, $logFile)
-          Set-Location $workDir
+        try {
+          Write-Log "=== Starting Zed Build Process ==="
+          Write-Log "Working directory: $(Get-Location)"
           
-          # Function to log with timestamp
-          function Write-Log {
-            param([string]$message)
-            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            $logMessage = "[$timestamp] $message"
-            Write-Host $logMessage
-            Add-Content -Path $logFile -Value $logMessage
-          }
+          # Configure git for long paths
+          Write-Log "Configuring git for long paths..."
+          git config --global core.longpaths true
+          Write-Log "Git longpaths configured successfully"
           
+          # Install CMake
+          Write-Log "Installing CMake..."
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          Write-Log "CMake installation completed"
+          
+          # Install Rustup
+          Write-Log "Installing Rustup..."
+          choco install rustup.install -y
+          Write-Log "Rustup installation completed"
+          
+          # Refresh PATH manually
+          Write-Log "Refreshing PATH environment variables..."
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+          $env:PATH += ";C:\Program Files\CMake\bin"
+          $env:PATH += ";$env:USERPROFILE\.cargo\bin"
+          
+          # Verify installations
+          Write-Log "Verifying installations..."
           try {
-            Write-Log "=== Starting Zed Build Process ==="
-            Write-Log "Working directory: $(Get-Location)"
-            
-            # Configure git for long paths FIRST
-            Write-Log "Configuring git for long paths..."
-            git config --global core.longpaths true
-            Write-Log "Git longpaths configured successfully"
-            
-            # Install CMake
-            Write-Log "Installing CMake..."
-            $cmakeInstall = choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y 2>&1
-            Write-Log "CMake installation completed"
-            
-            # Install Rustup
-            Write-Log "Installing Rustup..."
-            $rustupInstall = choco install rustup.install -y 2>&1
-            Write-Log "Rustup installation completed"
-            
-            # Refresh environment variables manually and create new process
-            Write-Log "Refreshing environment and starting new PowerShell session..."
-            
-            # Create a new PowerShell process with refreshed environment
-            $newPSJob = Start-Job -ScriptBlock {
-              param($workDir, $logFile)
-              Set-Location $workDir
-              
-              function Write-Log {
-                param([string]$message)
-                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                $logMessage = "[$timestamp] $message"
-                Write-Host $logMessage
-                Add-Content -Path $logFile -Value $logMessage
-              }
-              
-              try {
-                Write-Log "=== New PowerShell session started ==="
-                
-                # Verify installations in new session
-                Write-Log "Verifying installations..."
-                
-                # Check CMake
-                try {
-                  $cmakeVersion = cmake --version 2>&1
-                  Write-Log "CMake version: $cmakeVersion"
-                } catch {
-                  Write-Log "CMake not found in PATH, trying to locate..."
-                  $cmakePath = Get-Command cmake -ErrorAction SilentlyContinue
-                  if ($cmakePath) {
-                    Write-Log "CMake found at: $($cmakePath.Source)"
-                  } else {
-                    Write-Log "CMake not found, adding to PATH..."
-                    $env:PATH += ";C:\Program Files\CMake\bin"
-                  }
-                }
-                
-                # Check Rust
-                try {
-                  $rustupVersion = rustup --version 2>&1
-                  $cargoVersion = cargo --version 2>&1
-                  $rustcVersion = rustc --version 2>&1
-                  
-                  Write-Log "Rustup version: $rustupVersion"
-                  Write-Log "Cargo version: $cargoVersion"
-                  Write-Log "Rustc version: $rustcVersion"
-                } catch {
-                  Write-Log "Rust tools not found in PATH, adding manually..."
-                  $env:PATH += ";$env:USERPROFILE\.cargo\bin"
-                  
-                  # Try again
-                  $rustupVersion = & "$env:USERPROFILE\.cargo\bin\rustup.exe" --version 2>&1
-                  $cargoVersion = & "$env:USERPROFILE\.cargo\bin\cargo.exe" --version 2>&1
-                  $rustcVersion = & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version 2>&1
-                  
-                  Write-Log "Rustup version: $rustupVersion"
-                  Write-Log "Cargo version: $cargoVersion"
-                  Write-Log "Rustc version: $rustcVersion"
-                }
-                
-                # Initialize Rust toolchain
-                Write-Log "Initializing Rust stable toolchain..."
-                rustup default stable
-                Write-Log "Rust toolchain initialized"
-                
-                # Clone Zed repository
-                Write-Log "Cloning Zed repository..."
-                $cloneResult = git clone https://github.com/zed-industries/zed.git 2>&1
-                Write-Log "Git clone completed"
-                
-                if (Test-Path "zed") {
-                  Write-Log "Successfully cloned Zed repository"
-                  Set-Location "zed"
-                  Write-Log "Changed to zed directory: $(Get-Location)"
-                  
-                  Write-Log "=== Starting Cargo Run Process ==="
-                  Write-Log "This may take 1-2 hours... Please be patient!"
-                  Write-Log "Building and running Zed editor..."
-                  
-                  # Run cargo run --release
-                  $cargoResult = cargo run --release 2>&1
-                  Write-Log "Cargo run output: $cargoResult"
-                  
-                  if ($LASTEXITCODE -eq 0) {
-                    Write-Log "=== BUILD AND RUN SUCCESSFUL ==="
-                  } else {
-                    Write-Log "=== BUILD/RUN FAILED with exit code: $LASTEXITCODE ==="
-                  }
-                } else {
-                  Write-Log "ERROR: Failed to clone Zed repository"
-                }
-                
-              } catch {
-                Write-Log "ERROR: Exception in new session: $($_.Exception.Message)"
-              }
-              
-              Write-Log "=== Build Process Completed ==="
-            } -ArgumentList $workDir, $logFile
-            
-            # Wait for the new PowerShell job to complete
-            Write-Log "Waiting for new PowerShell session to complete..."
-            Wait-Job $newPSJob
-            $newPSOutput = Receive-Job $newPSJob
-            Write-Log "New PowerShell session output: $newPSOutput"
-            
+            $cmakeVersion = & cmake --version 2>&1
+            Write-Log "CMake version: $($cmakeVersion -split "`n" | Select-Object -First 1)"
           } catch {
-            Write-Log "ERROR: Exception occurred: $($_.Exception.Message)"
-            Write-Log "Stack trace: $($_.Exception.StackTrace)"
+            Write-Log "WARNING: CMake verification failed: $_"
           }
           
-          Write-Log "=== All Build Processes Completed ==="
-        } -ArgumentList (Get-Location), $logFile
-        
-        # Keep monitoring build status and maintain RDP tunnel with event-based logging
-        Write-Host "=== Build started in background ==="
-        Write-Host "RDP tunnel will remain active throughout the process"
-        Write-Host "You can connect via RDP to monitor progress in real-time"
-        Write-Host "Log file: build-log.txt"
-        Write-Host "=== Live Log Stream (event-based) ==="
-        
-        $startTime = Get-Date
-        $lastLogSize = 0
-        
-        while ($buildJob.State -eq "Running") {
-          Start-Sleep -Milliseconds 100  # Check every 100ms for new log entries
-          
-          # Check if log file exists and has new content
-          if (Test-Path $logFile) {
-            $currentLogSize = (Get-Item $logFile).Length
+          # Initialize Rust (direct path approach)
+          Write-Log "Initializing Rust toolchain..."
+          $rustupPath = "$env:USERPROFILE\.cargo\bin\rustup.exe"
+          if (Test-Path $rustupPath) {
+            & $rustupPath default stable
+            Write-Log "Rust toolchain initialized successfully"
             
-            # If file size changed, read new content
-            if ($currentLogSize -gt $lastLogSize) {
-              try {
-                # Read only the new content since last check
-                $fileStream = [System.IO.File]::OpenRead($logFile)
-                $fileStream.Seek($lastLogSize, [System.IO.SeekOrigin]::Begin)
-                $reader = New-Object System.IO.StreamReader($fileStream)
-                $newContent = $reader.ReadToEnd()
-                $reader.Close()
-                $fileStream.Close()
-                
-                # Display new content immediately
-                if ($newContent.Trim() -ne "") {
-                  Write-Host $newContent.TrimEnd() -ForegroundColor Green
+            # Show Rust versions
+            $rustcVersion = & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version 2>&1
+            $cargoVersion = & "$env:USERPROFILE\.cargo\bin\cargo.exe" --version 2>&1
+            Write-Log "Rustc version: $rustcVersion"
+            Write-Log "Cargo version: $cargoVersion"
+          } else {
+            Write-Log "ERROR: Rustup not found at expected path: $rustupPath"
+            throw "Rustup installation failed"
+          }
+          
+          # Clone Zed repository
+          Write-Log "Cloning Zed repository..."
+          git clone https://github.com/zed-industries/zed.git
+          Write-Log "Git clone completed"
+          
+          if (Test-Path "zed") {
+            Write-Log "Successfully cloned Zed repository"
+            Set-Location "zed"
+            Write-Log "Changed to zed directory: $(Get-Location)"
+            
+            Write-Log "=== Starting Cargo Build Process ==="
+            Write-Log "This may take 1-2 hours... Please be patient!"
+            Write-Log "Building Zed editor in release mode..."
+            
+            # Use cargo build instead of cargo run to get the executable
+            $cargoPath = "$env:USERPROFILE\.cargo\bin\cargo.exe"
+            Write-Log "Running: $cargoPath build --release"
+            
+            # Execute cargo build with real-time output
+            $startTime = Get-Date
+            $process = Start-Process -FilePath $cargoPath -ArgumentList "build", "--release" -NoNewWindow -PassThru -RedirectStandardOutput "build-output.log" -RedirectStandardError "build-error.log"
+            
+            # Monitor build progress
+            while (-not $process.HasExited) {
+              Start-Sleep -Seconds 30
+              $elapsed = (Get-Date) - $startTime
+              Write-Log "Build still running... Elapsed time: $($elapsed.ToString('hh\:mm\:ss'))"
+              
+              # Show recent output if available
+              if (Test-Path "build-output.log") {
+                $recentOutput = Get-Content "build-output.log" -Tail 5 -ErrorAction SilentlyContinue
+                if ($recentOutput) {
+                  Write-Log "Recent build output: $($recentOutput -join '; ')"
                 }
-                
-                $lastLogSize = $currentLogSize
-              } catch {
-                # File might be locked, skip this iteration
-                Start-Sleep -Milliseconds 50
               }
             }
             
-            # Show elapsed time every 30 seconds
-            $elapsed = (Get-Date) - $startTime
-            if ($elapsed.TotalSeconds % 30 -lt 0.1) {
-              Write-Host "--- Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active ---" -ForegroundColor Yellow
+            $buildDuration = (Get-Date) - $startTime
+            Write-Log "Build process completed in: $($buildDuration.ToString('hh\:mm\:ss'))"
+            Write-Log "Build exit code: $($process.ExitCode)"
+            
+            # Show build logs
+            if (Test-Path "build-output.log") {
+              $buildOutput = Get-Content "build-output.log" -Tail 10
+              Write-Log "Last 10 lines of build output:"
+              $buildOutput | ForEach-Object { Write-Log "  $_" }
             }
+            
+            if (Test-Path "build-error.log") {
+              $buildErrors = Get-Content "build-error.log" -Tail 10
+              if ($buildErrors) {
+                Write-Log "Last 10 lines of build errors:"
+                $buildErrors | ForEach-Object { Write-Log "  ERROR: $_" }
+              }
+            }
+            
+            # Find the built executable
+            Write-Log "=== Searching for built executable ==="
+            $possiblePaths = @(
+              "target\release\zed.exe",
+              "target\release\Zed.exe",
+              "target\release\zed-editor.exe"
+            )
+            
+            $exePath = $null
+            foreach ($path in $possiblePaths) {
+              if (Test-Path $path) {
+                $exePath = $path
+                Write-Log "Found Zed executable at: $path"
+                break
+              }
+            }
+            
+            # If not found in expected locations, search dynamically
+            if (-not $exePath) {
+              Write-Log "Executable not found in expected locations, searching target/release directory..."
+              $exeFiles = Get-ChildItem -Path "target\release" -Filter "*.exe" -ErrorAction SilentlyContinue
+              if ($exeFiles) {
+                Write-Log "Found executables in target/release:"
+                $exeFiles | ForEach-Object { Write-Log "  $($_.Name) ($($_.Length) bytes)" }
+                
+                # Look for zed-related executables
+                $zedExe = $exeFiles | Where-Object { $_.Name -like "*zed*" } | Select-Object -First 1
+                if ($zedExe) {
+                  $exePath = $zedExe.FullName
+                  Write-Log "Selected Zed executable: $exePath"
+                }
+              }
+            }
+            
+            if ($exePath -and (Test-Path $exePath)) {
+              $fileSize = (Get-Item $exePath).Length
+              Write-Log "=== BUILD SUCCESSFUL ==="
+              Write-Log "Zed executable found: $exePath"
+              Write-Log "File size: $([math]::Round($fileSize/1MB, 2)) MB"
+              
+              # Upload to file.io
+              Write-Log "=== Uploading to file.io ==="
+              try {
+                $uploadResult = Invoke-RestMethod -Uri "https://file.io/?expires=1w" -Method Post -InFile $exePath
+                
+                if ($uploadResult.success) {
+                  Write-Log "=== UPLOAD SUCCESSFUL ==="
+                  Write-Log "File uploaded successfully!"
+                  Write-Log "Download link: $($uploadResult.link)"
+                  Write-Log "Expiry: $($uploadResult.expiry)"
+                  Write-Log "File key: $($uploadResult.key)"
+                  
+                  # Create summary file for easy access
+                  $summaryContent = @"
+Zed Editor Build Summary
+========================
+Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Build Duration: $($buildDuration.ToString('hh\:mm\:ss'))
+File Size: $([math]::Round($fileSize/1MB, 2)) MB
+Download Link: $($uploadResult.link)
+Expiry: $($uploadResult.expiry)
+File Key: $($uploadResult.key)
+
+Instructions:
+1. Click the download link above
+2. The file will be deleted after download (one-time use)
+3. Link expires in 7 days
+4. File is automatically deleted after expiry
+
+Build completed successfully!
+"@
+                  
+                  $summaryContent | Out-File -FilePath "build-summary.txt" -Encoding UTF8
+                  Write-Log "Build summary saved to build-summary.txt"
+                  
+                  # Set GitHub Actions output for potential use in notifications
+                  Write-Host "::set-output name=download_link::$($uploadResult.link)"
+                  Write-Host "::set-output name=file_size::$([math]::Round($fileSize/1MB, 2)) MB"
+                  Write-Host "::set-output name=build_duration::$($buildDuration.ToString('hh\:mm\:ss'))"
+                  
+                } else {
+                  Write-Log "=== UPLOAD FAILED ==="
+                  Write-Log "Upload failed: $($uploadResult.error)"
+                  Write-Log "Error message: $($uploadResult.message)"
+                }
+              } catch {
+                Write-Log "=== UPLOAD ERROR ==="
+                Write-Log "Upload error: $($_.Exception.Message)"
+                Write-Log "Exception details: $($_.Exception.ToString())"
+              }
+              
+            } else {
+              Write-Log "=== BUILD FAILED ==="
+              Write-Log "ERROR: Could not find Zed executable after build"
+              Write-Log "Build may have failed or executable is in unexpected location"
+              
+              # List all files in target/release for debugging
+              if (Test-Path "target\release") {
+                Write-Log "Contents of target/release directory:"
+                Get-ChildItem -Path "target\release" -Recurse | ForEach-Object { 
+                  Write-Log "  $($_.FullName) ($($_.Length) bytes)"
+                }
+              }
+            }
+            
           } else {
-            # Show status while waiting for log file
-            $elapsed = (Get-Date) - $startTime
-            if ($elapsed.TotalSeconds % 5 -lt 0.1) {
-              Write-Host "Waiting for log file... ($($elapsed.ToString('hh\:mm\:ss')))" -ForegroundColor Cyan
-            }
+            Write-Log "ERROR: Failed to clone Zed repository"
           }
+          
+        } catch {
+          Write-Log "ERROR: Exception occurred: $($_.Exception.Message)"
+          Write-Log "Stack trace: $($_.Exception.StackTrace)"
         }
         
-        # Get final build results
-        Write-Host "=== Build job completed ==="
-        $buildOutput = Receive-Job -Job $buildJob -Wait
-        Write-Host "Final build output:"
-        Write-Host $buildOutput
+        Write-Log "=== Build Process Completed ==="
         
-        # Display final log summary
-        if (Test-Path $logFile) {
-          Write-Host "=== Final Log Summary ==="
-          $logContent = Get-Content $logFile
-          Write-Host "Total log lines: $($logContent.Count)"
-          Write-Host "Last 20 log entries:"
-          $logContent | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
-        }
-        
-        # Keep RDP tunnel active indefinitely (or until GitHub Actions timeout)
+        # Keep RDP tunnel active for review
         Write-Host "=== Build process finished ==="
-        Write-Host "RDP tunnel will remain active until workflow timeout"
-        Write-Host "You can connect to review build results, logs, and built files"
-        Write-Host "Entering infinite loop to keep tunnel alive..."
+        Write-Host "RDP tunnel will remain active for 10 more minutes for review"
+        Write-Host "You can connect to review build results and logs"
         
-        # Infinite loop to keep RDP active
-        while ($true) {
+        # Keep tunnel active for 10 minutes then exit
+        $endTime = (Get-Date).AddMinutes(10)
+        while ((Get-Date) -lt $endTime) {
           Start-Sleep -Seconds 60
-          Write-Host "RDP tunnel still active... $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+          $remaining = ($endTime - (Get-Date)).TotalMinutes
+          Write-Host "RDP tunnel active for $([math]::Round($remaining, 1)) more minutes... $(Get-Date -Format 'HH:mm:ss')"
         }
+        
+        Write-Host "Workflow completed. RDP tunnel closing."
+    
+    # Send email notification using GitHub Actions
+    - name: Send Email Notification
+      if: always()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "Zed Build Completed - ${{ job.status }}"
+        body: |
+          Zed Editor Build Status: ${{ job.status }}
+          
+          Repository: ${{ github.repository }}
+          Commit: ${{ github.sha }}
+          Branch: ${{ github.ref }}
+          
+          Build Duration: ${{ steps.build.outputs.build_duration }}
+          File Size: ${{ steps.build.outputs.file_size }}
+          
+          Download Link: ${{ steps.build.outputs.download_link }}
+          
+          Note: 
+          - Link expires in 7 days
+          - File is deleted after first download
+          - This is a one-time use link
+          
+          Build logs are available in the GitHub Actions run.
+        to: YOUR_EMAIL@example.com
+        from: GitHub Actions <noreply@github.com>
