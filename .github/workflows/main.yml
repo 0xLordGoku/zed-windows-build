@@ -183,30 +183,57 @@ jobs:
           Write-Log "=== All Build Processes Completed ==="
         } -ArgumentList (Get-Location), $logFile
         
-        # Keep monitoring build status and maintain RDP tunnel with 1-second updates
+        # Keep monitoring build status and maintain RDP tunnel with event-based logging
         Write-Host "=== Build started in background ==="
         Write-Host "RDP tunnel will remain active throughout the process"
         Write-Host "You can connect via RDP to monitor progress in real-time"
         Write-Host "Log file: build-log.txt"
+        Write-Host "=== Live Log Stream (event-based) ==="
         
         $startTime = Get-Date
+        $lastLogSize = 0
+        
         while ($buildJob.State -eq "Running") {
-          Start-Sleep -Seconds 1  # Update every second
-          $elapsed = (Get-Date) - $startTime
+          Start-Sleep -Milliseconds 100  # Check every 100ms for new log entries
           
-          # Show recent log entries if log file exists
+          # Check if log file exists and has new content
           if (Test-Path $logFile) {
-            $recentLogs = Get-Content $logFile -Tail 5 -ErrorAction SilentlyContinue
-            if ($recentLogs) {
-              # Clear previous output and show current status
-              Clear-Host
-              Write-Host "Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active"
-              Write-Host "Recent log entries:"
-              $recentLogs | ForEach-Object { Write-Host "  $_" }
-              Write-Host "`n--- Live log monitoring (updates every second) ---"
+            $currentLogSize = (Get-Item $logFile).Length
+            
+            # If file size changed, read new content
+            if ($currentLogSize -gt $lastLogSize) {
+              try {
+                # Read only the new content since last check
+                $fileStream = [System.IO.File]::OpenRead($logFile)
+                $fileStream.Seek($lastLogSize, [System.IO.SeekOrigin]::Begin)
+                $reader = New-Object System.IO.StreamReader($fileStream)
+                $newContent = $reader.ReadToEnd()
+                $reader.Close()
+                $fileStream.Close()
+                
+                # Display new content immediately
+                if ($newContent.Trim() -ne "") {
+                  Write-Host $newContent.TrimEnd() -ForegroundColor Green
+                }
+                
+                $lastLogSize = $currentLogSize
+              } catch {
+                # File might be locked, skip this iteration
+                Start-Sleep -Milliseconds 50
+              }
+            }
+            
+            # Show elapsed time every 30 seconds
+            $elapsed = (Get-Date) - $startTime
+            if ($elapsed.TotalSeconds % 30 -lt 0.1) {
+              Write-Host "--- Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active ---" -ForegroundColor Yellow
             }
           } else {
-            Write-Host "Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active | Waiting for log file..."
+            # Show status while waiting for log file
+            $elapsed = (Get-Date) - $startTime
+            if ($elapsed.TotalSeconds % 5 -lt 0.1) {
+              Write-Host "Waiting for log file... ($($elapsed.ToString('hh\:mm\:ss')))" -ForegroundColor Cyan
+            }
           }
         }
         
