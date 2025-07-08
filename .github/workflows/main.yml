@@ -58,88 +58,132 @@ jobs:
             # Configure git for long paths FIRST
             Write-Log "Configuring git for long paths..."
             git config --global core.longpaths true
-            Write-Log "Git longpaths configured"
+            Write-Log "Git longpaths configured successfully"
             
-            # Install Visual Studio Build Tools (required for Rust compilation on Windows)
-            Write-Log "Installing Visual Studio Build Tools..."
-            choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --includeOptional --passive --locale en-US" -y
-            Write-Log "Visual Studio Build Tools installed"
-            
+            # Install CMake
             Write-Log "Installing CMake..."
-            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-            Write-Log "CMake installed"
+            $cmakeInstall = choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y 2>&1
+            Write-Log "CMake installation completed"
             
+            # Install Rustup
             Write-Log "Installing Rustup..."
-            choco install rustup.install -y
-            Write-Log "Rustup installed"
+            $rustupInstall = choco install rustup.install -y 2>&1
+            Write-Log "Rustup installation completed"
             
-            # Refresh PATH manually since refreshenv doesn't work in jobs
-            Write-Log "Refreshing PATH environment..."
-            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-            Write-Log "PATH refreshed"
+            # Refresh environment variables manually and create new process
+            Write-Log "Refreshing environment and starting new PowerShell session..."
             
-            # Initialize Rust toolchain
-            Write-Log "Initializing Rust toolchain..."
-            & "${env:USERPROFILE}\.cargo\bin\rustup.exe" default stable
-            Write-Log "Rust toolchain initialized"
-            
-            # Add Rust to PATH for this session
-            $env:PATH = "${env:USERPROFILE}\.cargo\bin;$env:PATH"
-            
-            Write-Log "Verifying installations..."
-            $cmakeVersion = & cmake --version 2>&1
-            $rustupVersion = & "${env:USERPROFILE}\.cargo\bin\rustup.exe" --version 2>&1
-            $cargoVersion = & "${env:USERPROFILE}\.cargo\bin\cargo.exe" --version 2>&1
-            $rustcVersion = & "${env:USERPROFILE}\.cargo\bin\rustc.exe" --version 2>&1
-            
-            Write-Log "CMake version: $cmakeVersion"
-            Write-Log "Rustup version: $rustupVersion"
-            Write-Log "Cargo version: $cargoVersion"
-            Write-Log "Rustc version: $rustcVersion"
-            
-            Write-Log "Cloning Zed repository..."
-            $cloneResult = git clone https://github.com/zed-industries/zed.git 2>&1
-            Write-Log "Git clone output: $cloneResult"
-            
-            if (Test-Path "zed") {
-              Write-Log "Successfully cloned Zed repository"
-              Set-Location "zed"
-              Write-Log "Changed to zed directory: $(Get-Location)"
+            # Create a new PowerShell process with refreshed environment
+            $newPSJob = Start-Job -ScriptBlock {
+              param($workDir, $logFile)
+              Set-Location $workDir
               
-              # Set environment variables for Windows build
-              $env:RUSTFLAGS = "-C target-feature=+crt-static"
-              $env:CARGO_TARGET_DIR = "target"
-              
-              Write-Log "=== Starting Cargo Build Process ==="
-              Write-Log "This may take 1-2 hours... Please be patient!"
-              
-              # Use cargo build instead of cargo run
-              $cargoResult = & "${env:USERPROFILE}\.cargo\bin\cargo.exe" build --release 2>&1
-              Write-Log "Cargo build output: $cargoResult"
-              
-              if ($LASTEXITCODE -eq 0) {
-                Write-Log "=== BUILD SUCCESSFUL ==="
-                Write-Log "Build artifacts location: $(Get-Location)\target\release\"
-                
-                # List built executables
-                $builtFiles = Get-ChildItem -Path "target\release\" -Filter "*.exe" | Select-Object -ExpandProperty Name
-                Write-Log "Built executables: $($builtFiles -join ', ')"
-              } else {
-                Write-Log "=== BUILD FAILED with exit code: $LASTEXITCODE ==="
+              function Write-Log {
+                param([string]$message)
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                $logMessage = "[$timestamp] $message"
+                Write-Host $logMessage
+                Add-Content -Path $logFile -Value $logMessage
               }
-            } else {
-              Write-Log "ERROR: Failed to clone Zed repository"
-            }
+              
+              try {
+                Write-Log "=== New PowerShell session started ==="
+                
+                # Verify installations in new session
+                Write-Log "Verifying installations..."
+                
+                # Check CMake
+                try {
+                  $cmakeVersion = cmake --version 2>&1
+                  Write-Log "CMake version: $cmakeVersion"
+                } catch {
+                  Write-Log "CMake not found in PATH, trying to locate..."
+                  $cmakePath = Get-Command cmake -ErrorAction SilentlyContinue
+                  if ($cmakePath) {
+                    Write-Log "CMake found at: $($cmakePath.Source)"
+                  } else {
+                    Write-Log "CMake not found, adding to PATH..."
+                    $env:PATH += ";C:\Program Files\CMake\bin"
+                  }
+                }
+                
+                # Check Rust
+                try {
+                  $rustupVersion = rustup --version 2>&1
+                  $cargoVersion = cargo --version 2>&1
+                  $rustcVersion = rustc --version 2>&1
+                  
+                  Write-Log "Rustup version: $rustupVersion"
+                  Write-Log "Cargo version: $cargoVersion"
+                  Write-Log "Rustc version: $rustcVersion"
+                } catch {
+                  Write-Log "Rust tools not found in PATH, adding manually..."
+                  $env:PATH += ";$env:USERPROFILE\.cargo\bin"
+                  
+                  # Try again
+                  $rustupVersion = & "$env:USERPROFILE\.cargo\bin\rustup.exe" --version 2>&1
+                  $cargoVersion = & "$env:USERPROFILE\.cargo\bin\cargo.exe" --version 2>&1
+                  $rustcVersion = & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version 2>&1
+                  
+                  Write-Log "Rustup version: $rustupVersion"
+                  Write-Log "Cargo version: $cargoVersion"
+                  Write-Log "Rustc version: $rustcVersion"
+                }
+                
+                # Initialize Rust toolchain
+                Write-Log "Initializing Rust stable toolchain..."
+                rustup default stable
+                Write-Log "Rust toolchain initialized"
+                
+                # Clone Zed repository
+                Write-Log "Cloning Zed repository..."
+                $cloneResult = git clone https://github.com/zed-industries/zed.git 2>&1
+                Write-Log "Git clone completed"
+                
+                if (Test-Path "zed") {
+                  Write-Log "Successfully cloned Zed repository"
+                  Set-Location "zed"
+                  Write-Log "Changed to zed directory: $(Get-Location)"
+                  
+                  Write-Log "=== Starting Cargo Run Process ==="
+                  Write-Log "This may take 1-2 hours... Please be patient!"
+                  Write-Log "Building and running Zed editor..."
+                  
+                  # Run cargo run --release
+                  $cargoResult = cargo run --release 2>&1
+                  Write-Log "Cargo run output: $cargoResult"
+                  
+                  if ($LASTEXITCODE -eq 0) {
+                    Write-Log "=== BUILD AND RUN SUCCESSFUL ==="
+                  } else {
+                    Write-Log "=== BUILD/RUN FAILED with exit code: $LASTEXITCODE ==="
+                  }
+                } else {
+                  Write-Log "ERROR: Failed to clone Zed repository"
+                }
+                
+              } catch {
+                Write-Log "ERROR: Exception in new session: $($_.Exception.Message)"
+              }
+              
+              Write-Log "=== Build Process Completed ==="
+            } -ArgumentList $workDir, $logFile
+            
+            # Wait for the new PowerShell job to complete
+            Write-Log "Waiting for new PowerShell session to complete..."
+            Wait-Job $newPSJob
+            $newPSOutput = Receive-Job $newPSJob
+            Write-Log "New PowerShell session output: $newPSOutput"
             
           } catch {
             Write-Log "ERROR: Exception occurred: $($_.Exception.Message)"
             Write-Log "Stack trace: $($_.Exception.StackTrace)"
           }
           
-          Write-Log "=== Build Process Completed ==="
+          Write-Log "=== All Build Processes Completed ==="
         } -ArgumentList (Get-Location), $logFile
         
-        # Keep monitoring build status and maintain RDP tunnel
+        # Keep monitoring build status and maintain RDP tunnel with 1-second updates
         Write-Host "=== Build started in background ==="
         Write-Host "RDP tunnel will remain active throughout the process"
         Write-Host "You can connect via RDP to monitor progress in real-time"
@@ -147,17 +191,22 @@ jobs:
         
         $startTime = Get-Date
         while ($buildJob.State -eq "Running") {
-          Start-Sleep -Seconds 30
+          Start-Sleep -Seconds 1  # Update every second
           $elapsed = (Get-Date) - $startTime
-          Write-Host "Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active"
           
           # Show recent log entries if log file exists
           if (Test-Path $logFile) {
-            $recentLogs = Get-Content $logFile -Tail 3
+            $recentLogs = Get-Content $logFile -Tail 5 -ErrorAction SilentlyContinue
             if ($recentLogs) {
+              # Clear previous output and show current status
+              Clear-Host
+              Write-Host "Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active"
               Write-Host "Recent log entries:"
               $recentLogs | ForEach-Object { Write-Host "  $_" }
+              Write-Host "`n--- Live log monitoring (updates every second) ---"
             }
+          } else {
+            Write-Host "Build running for: $($elapsed.ToString('hh\:mm\:ss')) | RDP tunnel active | Waiting for log file..."
           }
         }
         
@@ -172,8 +221,8 @@ jobs:
           Write-Host "=== Final Log Summary ==="
           $logContent = Get-Content $logFile
           Write-Host "Total log lines: $($logContent.Count)"
-          Write-Host "Last 10 log entries:"
-          $logContent | Select-Object -Last 10 | ForEach-Object { Write-Host "  $_" }
+          Write-Host "Last 20 log entries:"
+          $logContent | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
         }
         
         # Keep RDP tunnel active indefinitely (or until GitHub Actions timeout)
