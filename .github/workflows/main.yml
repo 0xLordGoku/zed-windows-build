@@ -1,39 +1,77 @@
 name: CI
-
 on: [push, workflow_dispatch]
-
 jobs:
   build:
-
     runs-on: windows-latest
-
     steps:
     - name: Enable Long Path Support
       run: |
         reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
-
-    - name: Download
+    
+    # Setup RDP access FIRST
+    - name: Download ngrok
       run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-
-    - name: Extract
+    - name: Extract ngrok
       run: Expand-Archive ngrok.zip
-
-    - name: Auth
+    - name: Auth ngrok
       run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
       env:
         NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-
     - name: Enable TS
       run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-
     - name: Allow RDP Through Firewall
       run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-
     - name: Require NLA
       run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
-
     - name: Reset runneradmin Password
       run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-
-    - name: Create Tunnel
-      run: .\ngrok\ngrok.exe tcp 3389
+    
+    # Start ngrok tunnel in background
+    - name: Create Tunnel and Run Build
+      run: |
+        # Start ngrok tunnel in background
+        Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden
+        Start-Sleep -Seconds 10
+        Write-Host "RDP tunnel should be available now!"
+        
+        # Start the build process in background
+        $buildJob = Start-Job -ScriptBlock {
+          Set-Location $args[0]
+          refreshenv
+          Write-Host "Starting dependency installation..."
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          choco install rustup.install -y
+          refreshenv
+          rustup default stable
+          
+          Write-Host "Verifying installations..."
+          cmake --version
+          rustup --version
+          cargo --version
+          rustc --version
+          
+          Write-Host "Cloning Zed repository..."
+          git clone https://github.com/zed-industries/zed.git
+          cd zed
+          
+          Write-Host "Starting build process... This may take 1-2 hours"
+          cargo run --release
+          
+          Write-Host "Build completed!"
+        } -ArgumentList (Get-Location)
+        
+        # Keep checking build status and keep ngrok alive
+        Write-Host "Monitoring build progress..."
+        while ($buildJob.State -eq "Running") {
+          Start-Sleep -Seconds 30
+          Write-Host "Build still running... RDP tunnel active"
+        }
+        
+        # Get build results
+        $buildOutput = Receive-Job -Job $buildJob
+        Write-Host "Build Output:"
+        Write-Host $buildOutput
+        
+        # Keep tunnel alive for additional time after build
+        Write-Host "Build finished! Keeping RDP tunnel active for 30 more minutes..."
+        Start-Sleep -Seconds 1800
