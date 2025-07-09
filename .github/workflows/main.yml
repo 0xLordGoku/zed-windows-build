@@ -14,7 +14,6 @@ jobs:
 
     - name: Create test file
       run: |
-        # Create a simple test file to upload
         $testContent = @"
         Test File for Upload
         ====================
@@ -30,49 +29,69 @@ jobs:
         Write-Host "Created test file: test-upload.txt"
         Get-Content "test-upload.txt"
 
-    - name: Upload file to file.io
+    - name: Upload file to file.io with Detailed Logging
       id: upload
       run: |
         try {
           Write-Host "=== Uploading file to file.io ==="
           
-          # Create a form object containing the file to ensure correct multipart/form-data encoding
           $form = @{
               file = Get-Item -Path "test-upload.txt"
           }
 
-          # Upload the test file to file.io using the -Form parameter
-          $uploadResult = Invoke-RestMethod -Uri "https://file.io/?expires=1w" -Method Post -Form $form
-
+          # Using -Verbose to get detailed command output
+          # Storing result in a variable to inspect it thoroughly
+          $uploadResult = Invoke-RestMethod -Uri "https://file.io/?expires=1w" -Method Post -Form $form -Verbose
+          
           if ($uploadResult.success) {
             Write-Host "Upload successful!"
             Write-Host "Download link: $($uploadResult.link)"
-            Write-Host "Expiry: $($uploadResult.expiry)"
-            Write-Host "Key: $($uploadResult.key)"
-
-            # Set outputs for the issue creation
+            # Set outputs and finish
             echo "download_link=$($uploadResult.link)" >> $env:GITHUB_OUTPUT
             echo "file_key=$($uploadResult.key)" >> $env:GITHUB_OUTPUT
             echo "expiry=$($uploadResult.expiry)" >> $env:GITHUB_OUTPUT
             echo "upload_status=success" >> $env:GITHUB_OUTPUT
-
             Write-Host "=== Upload completed successfully ==="
           } else {
-            # Handle potential API errors from file.io
-            $errorMessage = if ($uploadResult.error) { $uploadResult.error } else { "Unknown error from API" }
-            Write-Host "Upload failed: $errorMessage"
+            # This block runs if the command succeeds but the API returns a failure status
+            Write-Host "Upload failed according to API response."
+            # Convert the entire response to JSON for detailed inspection
+            $responseJson = $uploadResult | ConvertTo-Json -Depth 5
+            Write-Host "Full API Response: $responseJson"
+            
+            # Set outputs for failure
+            $errorMessage = $uploadResult.error | ForEach-Object { $_ } | Out-String
             echo "upload_status=failed" >> $env:GITHUB_OUTPUT
             echo "error_message=$errorMessage" >> $env:GITHUB_OUTPUT
           }
         } catch {
-          # Handle script-level errors
-          Write-Host "Upload error: $($_.Exception.Message)"
+          # This block runs if Invoke-RestMethod throws an exception (e.g., for 4xx/5xx HTTP status codes)
+          Write-Host "An exception was thrown during the upload process."
+          Write-Host "Exception Message: $($_.Exception.Message)"
+
+          # Check if the exception contains a response object
+          if ($_.Exception.Response) {
+              $statusCode = $_.Exception.Response.StatusCode
+              # Read the response stream to get the body content
+              $streamReader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+              $responseBody = $streamReader.ReadToEnd()
+              $streamReader.Close()
+              
+              Write-Host "HTTP Status Code: $statusCode"
+              Write-Host "Full Response Body from Exception: $responseBody"
+              $errorMessage = "HTTP $statusCode - $responseBody"
+          } else {
+              $errorMessage = $_.Exception.Message
+          }
+          
+          # Set outputs for error
           echo "upload_status=error" >> $env:GITHUB_OUTPUT
-          echo "error_message=$($_.Exception.Message)" >> $env:GITHUB_OUTPUT
+          echo "error_message=$errorMessage" >> $env:GITHUB_OUTPUT
         }
+      shell: pwsh
 
     - name: Create GitHub Issue with Download Link
-      if: always() # This step runs even if the upload fails to report the status
+      if: always()
       uses: actions/github-script@v7
       with:
         script: |
@@ -98,7 +117,7 @@ jobs:
             issueBody += `- File is deleted after the first download.\n`;
           } else {
             issueBody += `**Status:** ${statusIcon} Upload Failed\n\n`;
-            issueBody += `**Reason:** ${errorMessage || 'No error message provided.'}\n\n`;
+            issueBody += `**Reason:** \`\`\`\n${errorMessage || 'No error message provided.'}\n\`\`\`\n\n`;
           }
           
           issueBody += `### Build Details\n`;
