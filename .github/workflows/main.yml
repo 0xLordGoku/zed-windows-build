@@ -4,7 +4,6 @@ on: [push, workflow_dispatch]
 permissions:
   contents: read
   issues: write
-  metadata: read
 
 jobs:
   test-upload-and-issue:
