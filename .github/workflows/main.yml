@@ -7,97 +7,56 @@ permissions:
 
 jobs:
   test-upload-and-issue:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest # Switched to ubuntu for easier curl/bash scripting
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Create test file
       run: |
-        $testContent = @"
+        # Create a simple test file to upload
+        test_content=$(cat <<-END
         Test File for Upload
         ====================
-        Created: $(Get-Date)
+        Created: $(date)
         Repository: ${{ github.repository }}
         Commit: ${{ github.sha }}
         Workflow Run: ${{ github.run_id }}
 
         This is a test file to verify the upload functionality.
-        "@
+        END
+        )
+        echo "$test_content" > test-upload.txt
+        echo "Created test file: test-upload.txt"
+        cat test-upload.txt
 
-        $testContent | Out-File -FilePath "test-upload.txt" -Encoding UTF8
-        Write-Host "Created test file: test-upload.txt"
-        Get-Content "test-upload.txt"
-
-    - name: Upload file to file.io with Detailed Logging
+    - name: Upload file to transfer.sh
       id: upload
       run: |
-        try {
-          Write-Host "=== Uploading file to file.io ==="
-          
-          $form = @{
-              file = Get-Item -Path "test-upload.txt"
-          }
-
-          # Using -Verbose to get detailed command output
-          # Storing result in a variable to inspect it thoroughly
-          $uploadResult = Invoke-RestMethod -Uri "https://file.io/?expires=1w" -Method Post -Form $form -Verbose
-          
-          if ($uploadResult.success) {
-            Write-Host "Upload successful!"
-            Write-Host "Download link: $($uploadResult.link)"
-            # Set outputs and finish
-            echo "download_link=$($uploadResult.link)" >> $env:GITHUB_OUTPUT
-            echo "file_key=$($uploadResult.key)" >> $env:GITHUB_OUTPUT
-            echo "expiry=$($uploadResult.expiry)" >> $env:GITHUB_OUTPUT
-            echo "upload_status=success" >> $env:GITHUB_OUTPUT
-            Write-Host "=== Upload completed successfully ==="
-          } else {
-            # This block runs if the command succeeds but the API returns a failure status
-            Write-Host "Upload failed according to API response."
-            # Convert the entire response to JSON for detailed inspection
-            $responseJson = $uploadResult | ConvertTo-Json -Depth 5
-            Write-Host "Full API Response: $responseJson"
-            
-            # Set outputs for failure
-            $errorMessage = $uploadResult.error | ForEach-Object { $_ } | Out-String
-            echo "upload_status=failed" >> $env:GITHUB_OUTPUT
-            echo "error_message=$errorMessage" >> $env:GITHUB_OUTPUT
-          }
-        } catch {
-          # This block runs if Invoke-RestMethod throws an exception (e.g., for 4xx/5xx HTTP status codes)
-          Write-Host "An exception was thrown during the upload process."
-          Write-Host "Exception Message: $($_.Exception.Message)"
-
-          # Check if the exception contains a response object
-          if ($_.Exception.Response) {
-              $statusCode = $_.Exception.Response.StatusCode
-              # Read the response stream to get the body content
-              $streamReader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-              $responseBody = $streamReader.ReadToEnd()
-              $streamReader.Close()
-              
-              Write-Host "HTTP Status Code: $statusCode"
-              Write-Host "Full Response Body from Exception: $responseBody"
-              $errorMessage = "HTTP $statusCode - $responseBody"
-          } else {
-              $errorMessage = $_.Exception.Message
-          }
-          
-          # Set outputs for error
-          echo "upload_status=error" >> $env:GITHUB_OUTPUT
-          echo "error_message=$errorMessage" >> $env:GITHUB_OUTPUT
-        }
-      shell: pwsh
+        # Upload the file using curl and capture the output (the download link)
+        # transfer.sh keeps files for 14 days
+        download_link=$(curl --upload-file ./test-upload.txt https://transfer.sh/test-upload.txt)
+        
+        if [[ "$download_link" == https* ]]; then
+          echo "Upload successful!"
+          echo "Download Link: $download_link"
+          echo "upload_status=success" >> $GITHUB_OUTPUT
+          echo "download_link=$download_link" >> $GITHUB_OUTPUT
+          echo "expiry=14 days" >> $GITHUB_OUTPUT
+        else
+          echo "Upload failed!"
+          echo "Response: $download_link"
+          echo "upload_status=failed" >> $GITHUB_OUTPUT
+          echo "error_message=Failed to upload to transfer.sh. Response: $download_link" >> $GITHUB_OUTPUT
+        fi
 
     - name: Create GitHub Issue with Download Link
-      if: always()
+      if: always() # This step runs even if the upload fails to report the status
       uses: actions/github-script@v7
       with:
         script: |
           const uploadStatus = '${{ steps.upload.outputs.upload_status }}';
           const downloadLink = '${{ steps.upload.outputs.download_link }}';
-          const fileKey = '${{ steps.upload.outputs.file_key }}';
           const expiry = '${{ steps.upload.outputs.expiry }}';
           const errorMessage = '${{ steps.upload.outputs.error_message }}';
 
@@ -110,11 +69,10 @@ jobs:
             issueBody += `**Status:** ${statusIcon} Upload Successful\n\n`;
             issueBody += `### Download Information\n`;
             issueBody += `**Download Link:** ${downloadLink}\n`;
-            issueBody += `**File Key:** ${fileKey}\n`;
             issueBody += `**Expires:** ${expiry}\n\n`;
             issueBody += `### Important Notes\n`;
-            issueBody += `- Link expires in 7 days.\n`;
-            issueBody += `- File is deleted after the first download.\n`;
+            issueBody += `- This link is hosted on transfer.sh.\n`;
+            issueBody += `- File will be available for 14 days.\n`;
           } else {
             issueBody += `**Status:** ${statusIcon} Upload Failed\n\n`;
             issueBody += `**Reason:** \`\`\`\n${errorMessage || 'No error message provided.'}\n\`\`\`\n\n`;
