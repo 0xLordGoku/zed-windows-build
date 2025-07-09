@@ -30,23 +30,23 @@ jobs:
     - name: Upload file and Set Status
       id: upload
       run: |
-        # Use a new service and capture all output (stdout and stderr) from curl.
-        # This prevents the step from failing if curl has a network error.
-        response=$(curl -T ./test-upload.txt bashupload.com 2>&1)
+        # Use curl's silent flag (-s) to hide the progress meter.
+        # Use grep to find the line containing "http" and awk to extract just the URL.
+        # The exit code of the pipeline will be the exit code of the last command (awk).
+        download_link=$(curl -s -T ./test-upload.txt bashupload.com | grep 'http' | awk '{print $2}')
         
-        # Check if the response is a valid URL, which indicates success.
-        if [[ "$response" == https* ]]; then
+        # Check if the extracted link looks like a valid URL.
+        if [[ "$download_link" == http* ]]; then
           echo "Upload successful!"
-          echo "Download Link: $response"
+          echo "Download Link: $download_link"
           echo "upload_status=success" >> $GITHUB_OUTPUT
-          echo "download_link=$response" >> $GITHUB_OUTPUT
-          echo "expiry=24 hours" >> $GITHUB_OUTPUT # bashupload default expiry
+          echo "download_link=$download_link" >> $GITHUB_OUTPUT
+          echo "expiry=24 hours" >> $GITHUB_OUTPUT
         else
           echo "Upload failed!"
-          echo "Error response: $response"
+          echo "Could not extract a valid URL from the response."
           echo "upload_status=failed" >> $GITHUB_OUTPUT
-          # Save the actual curl error message for the issue body.
-          echo "error_message=$response" >> $GITHUB_OUTPUT
+          echo "error_message=Upload to bashupload.com failed or did not return a valid URL." >> $GITHUB_OUTPUT
         fi
 
     - name: Create GitHub Issue with Download Link
@@ -57,27 +57,25 @@ jobs:
           const uploadStatus = '${{ steps.upload.outputs.upload_status }}';
           const downloadLink = '${{ steps.upload.outputs.download_link }}';
           const expiry = '${{ steps.upload.outputs.expiry }}';
-          const errorMessage = `${{ steps.upload.outputs.error_message }}`.trim();
+          const errorMessage = '${{ steps.upload.outputs.error_message }}';
 
           const statusIcon = uploadStatus === 'success' ? '✅' : '❌';
-          const issueTitle = `Upload Test ${statusIcon} ${uploadStatus || 'unknown'} - ${new Date().toLocaleDateString()}`;
-
-          // **FIX:** Create a base label array and only add the status if it's not empty.
-          const labels = ['upload-test'];
-          if (uploadStatus) {
-            labels.push(uploadStatus);
-          }
+          // Default to 'failed' if status is missing, preventing empty labels.
+          const finalStatus = uploadStatus || 'failed'; 
+          const issueTitle = `Upload Test ${statusIcon} ${finalStatus.charAt(0).toUpperCase() + finalStatus.slice(1)} - ${new Date().toLocaleDateString()}`;
+          
+          const labels = ['upload-test', finalStatus];
           
           let issueBody = `## File Upload Test Results\n\n`;
           
           if (uploadStatus === 'success') {
             issueBody += `**Status:** ${statusIcon} Upload Successful\n\n`;
             issueBody += `### Download Information\n`;
-            issueBody += `**Download Link:** ${downloadLink}\n`;
+            issueBody += `**Download Link:** [${downloadLink}](${downloadLink})\n`;
             issueBody += `**Expires:** Approximately ${expiry}\n`;
           } else {
             issueBody += `**Status:** ${statusIcon} Upload Failed\n\n`;
-            issueBody += `**Reason:** \`\`\`\n${errorMessage || 'No error message available.'}\n\`\`\`\n\n`;
+            issueBody += `**Reason:** \`\`\`\n${errorMessage || 'An unknown error occurred during the upload step.'}\n\`\`\`\n\n`;
           }
           
           issueBody += `### Build Details\n`;
@@ -91,7 +89,7 @@ jobs:
               repo: context.repo.repo,
               title: issueTitle,
               body: issueBody,
-              labels: labels // Use the safely constructed labels array
+              labels: labels
             });
             console.log(`Issue created successfully: ${issue.data.html_url}`);
           } catch (error) {
