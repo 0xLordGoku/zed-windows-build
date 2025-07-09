@@ -11,7 +11,7 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Create test file
       run: |
         # Create a simple test file to upload
@@ -22,49 +22,57 @@ jobs:
         Repository: ${{ github.repository }}
         Commit: ${{ github.sha }}
         Workflow Run: ${{ github.run_id }}
-        
+
         This is a test file to verify the upload functionality.
         "@
-        
+
         $testContent | Out-File -FilePath "test-upload.txt" -Encoding UTF8
         Write-Host "Created test file: test-upload.txt"
         Get-Content "test-upload.txt"
-    
-    - name: Upload file to file.io and create issue
+
+    - name: Upload file to file.io
       id: upload
       run: |
         try {
           Write-Host "=== Uploading file to file.io ==="
           
-          # Upload the test file to file.io
-          $uploadResult = Invoke-RestMethod -Uri "https://file.io/?expires=1w" -Method Post -InFile "test-upload.txt"
-          
+          # Create a form object containing the file to ensure correct multipart/form-data encoding
+          $form = @{
+              file = Get-Item -Path "test-upload.txt"
+          }
+
+          # Upload the test file to file.io using the -Form parameter
+          $uploadResult = Invoke-RestMethod -Uri "https://file.io/?expires=1w" -Method Post -Form $form
+
           if ($uploadResult.success) {
             Write-Host "Upload successful!"
             Write-Host "Download link: $($uploadResult.link)"
             Write-Host "Expiry: $($uploadResult.expiry)"
             Write-Host "Key: $($uploadResult.key)"
-            
+
             # Set outputs for the issue creation
             echo "download_link=$($uploadResult.link)" >> $env:GITHUB_OUTPUT
             echo "file_key=$($uploadResult.key)" >> $env:GITHUB_OUTPUT
             echo "expiry=$($uploadResult.expiry)" >> $env:GITHUB_OUTPUT
             echo "upload_status=success" >> $env:GITHUB_OUTPUT
-            
+
             Write-Host "=== Upload completed successfully ==="
           } else {
-            Write-Host "Upload failed: $($uploadResult.error)"
+            # Handle potential API errors from file.io
+            $errorMessage = if ($uploadResult.error) { $uploadResult.error } else { "Unknown error from API" }
+            Write-Host "Upload failed: $errorMessage"
             echo "upload_status=failed" >> $env:GITHUB_OUTPUT
-            echo "error_message=$($uploadResult.error)" >> $env:GITHUB_OUTPUT
+            echo "error_message=$errorMessage" >> $env:GITHUB_OUTPUT
           }
         } catch {
+          # Handle script-level errors
           Write-Host "Upload error: $($_.Exception.Message)"
           echo "upload_status=error" >> $env:GITHUB_OUTPUT
           echo "error_message=$($_.Exception.Message)" >> $env:GITHUB_OUTPUT
         }
-    
+
     - name: Create GitHub Issue with Download Link
-      if: always()
+      if: always() # This step runs even if the upload fails to report the status
       uses: actions/github-script@v7
       with:
         script: |
@@ -73,33 +81,33 @@ jobs:
           const fileKey = '${{ steps.upload.outputs.file_key }}';
           const expiry = '${{ steps.upload.outputs.expiry }}';
           const errorMessage = '${{ steps.upload.outputs.error_message }}';
+
+          const statusIcon = uploadStatus === 'success' ? '✅' : '❌';
+          const issueTitle = `Upload Test ${statusIcon} ${uploadStatus.charAt(0).toUpperCase() + uploadStatus.slice(1)} - ${new Date().toLocaleDateString()}`;
           
           let issueBody = `## File Upload Test Results\n\n`;
           
           if (uploadStatus === 'success') {
-            issueBody += `**Status:** ✅ Upload Successful\n\n`;
+            issueBody += `**Status:** ${statusIcon} Upload Successful\n\n`;
             issueBody += `### Download Information\n`;
             issueBody += `**Download Link:** ${downloadLink}\n`;
             issueBody += `**File Key:** ${fileKey}\n`;
             issueBody += `**Expires:** ${expiry}\n\n`;
             issueBody += `### Important Notes\n`;
-            issueBody += `- Link expires in 7 days\n`;
-            issueBody += `- File is deleted after first download (one-time use)\n`;
-            issueBody += `- This is a temporary hosting link\n\n`;
+            issueBody += `- Link expires in 7 days.\n`;
+            issueBody += `- File is deleted after the first download.\n`;
           } else {
-            issueBody += `**Status:** ❌ Upload Failed\n\n`;
-            issueBody += `**Error:** ${errorMessage}\n\n`;
+            issueBody += `**Status:** ${statusIcon} Upload Failed\n\n`;
+            issueBody += `**Reason:** ${errorMessage || 'No error message provided.'}\n\n`;
           }
           
           issueBody += `### Build Details\n`;
           issueBody += `- **Repository:** ${{ github.repository }}\n`;
           issueBody += `- **Commit:** ${{ github.sha }}\n`;
           issueBody += `- **Branch:** ${{ github.ref }}\n`;
-          issueBody += `- **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\n`;
+          issueBody += `- **Workflow Run:** [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n`;
           issueBody += `- **Triggered by:** ${{ github.event_name }}\n`;
-          issueBody += `- **Actor:** ${{ github.actor }}\n`;
-          
-          const issueTitle = `Upload Test ${uploadStatus} - ${new Date().toLocaleDateString()}`;
+          issueBody += `- **Actor:** @${{ github.actor }}\n`;
           
           try {
             const issue = await github.rest.issues.create({
