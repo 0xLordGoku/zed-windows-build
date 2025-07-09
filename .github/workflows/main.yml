@@ -1,5 +1,11 @@
 name: CI
 on: [push, workflow_dispatch]
+
+# === FIX: ADD PERMISSIONS BLOCK ===
+permissions:
+  issues: write
+  contents: read # Good practice to keep for actions/checkout
+
 jobs:
   build:
     runs-on: windows-latest
@@ -68,27 +74,12 @@ jobs:
           $env:PATH += ";C:\Program Files\CMake\bin"
           $env:PATH += ";$env:USERPROFILE\.cargo\bin"
           
-          # Verify installations
-          Write-Log "Verifying installations..."
-          try {
-            $cmakeVersion = & cmake --version 2>&1
-            Write-Log "CMake version: $($cmakeVersion -split "`n" | Select-Object -First 1)"
-          } catch {
-            Write-Log "WARNING: CMake verification failed: $_"
-          }
-          
           # Initialize Rust (direct path approach)
           Write-Log "Initializing Rust toolchain..."
           $rustupPath = "$env:USERPROFILE\.cargo\bin\rustup.exe"
           if (Test-Path $rustupPath) {
             & $rustupPath default stable
             Write-Log "Rust toolchain initialized successfully"
-            
-            # Show Rust versions
-            $rustcVersion = & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version 2>&1
-            $cargoVersion = & "$env:USERPROFILE\.cargo\bin\cargo.exe" --version 2>&1
-            Write-Log "Rustc version: $rustcVersion"
-            Write-Log "Cargo version: $cargoVersion"
           } else {
             Write-Log "ERROR: Rustup not found at expected path: $rustupPath"
             throw "Rustup installation failed"
@@ -105,20 +96,15 @@ jobs:
             Write-Log "Changed to zed directory: $(Get-Location)"
             
             Write-Log "=== Starting Cargo Build Process ==="
-            Write-Log "This may take 1-2 hours... Please be patient!"
-            Write-Log "Building Zed editor in release mode..."
-            
-            # Use cargo build instead of cargo run to get the executable
             $cargoPath = "$env:USERPROFILE\.cargo\bin\cargo.exe"
-            Write-Log "Running: $cargoPath build --release"
             
-            # Execute cargo build with real-time output
+            # Execute cargo build
             $startTime = Get-Date
-            $process = Start-Process -FilePath $cargoPath -ArgumentList "build", "--release" -NoNewWindow -PassThru -RedirectStandardOutput "build-output.log" -RedirectStandardError "build-error.log"
+            $process = Start-Process -FilePath $cargoPath -ArgumentList "build", "--release" -NoNewWindow -PassThru
             
             # Monitor build progress
             while (-not $process.HasExited) {
-              Start-Sleep -Seconds 30
+              Start-Sleep -Seconds 60
               $elapsed = (Get-Date) - $startTime
               Write-Log "Build still running... Elapsed time: $($elapsed.ToString('hh\:mm\:ss'))"
             }
@@ -128,59 +114,32 @@ jobs:
             Write-Log "Build exit code: $($process.ExitCode)"
             
             # Find the built executable
-            Write-Log "=== Searching for built executable ==="
-            $possiblePaths = @(
-              "target\release\zed.exe"
-            )
+            $exePath = "target\release\zed.exe"
             
-            $exePath = $null
-            foreach ($path in $possiblePaths) {
-              if (Test-Path $path) {
-                $exePath = $path
-                Write-Log "Found Zed executable at: $path"
-                break
-              }
-            }
-            
-            if (-not $exePath) {
-              Write-Log "Executable not found in expected locations, searching dynamically..."
-              $zedExe = Get-ChildItem -Path "target\release" -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*zed*" } | Select-Object -First 1
-              if ($zedExe) {
-                $exePath = $zedExe.FullName
-                Write-Log "Selected Zed executable: $exePath"
-              }
-            }
-            
-            if ($exePath -and (Test-Path $exePath)) {
+            if (Test-Path $exePath) {
               $fileSize = (Get-Item $exePath).Length
               Write-Log "=== BUILD SUCCESSFUL ==="
               Write-Log "Zed executable found: $exePath"
               Write-Log "File size: $([math]::Round($fileSize/1MB, 2)) MB"
               
-              # === UPLOAD LOGIC MODIFIED ===
+              # Upload logic
               Write-Log "=== Uploading executable... ==="
               try {
-                # Use curl.exe with -s (silent) and -T (upload), then parse the response
                 $uploadResponse = & curl.exe -s -T $exePath "bashupload.com"
                 $download_link = $uploadResponse | Select-String -Pattern "http" | ForEach-Object { ($_ -split '\s+')[1] } | Select-Object -First 1
 
                 if ($download_link -and $download_link.StartsWith("http")) {
                   Write-Log "=== UPLOAD SUCCESSFUL ==="
                   Write-Log "Download link: $download_link"
-
-                  # Set GitHub Actions output for the issue creation step
                   echo "download_link=$download_link" >> $env:GITHUB_OUTPUT
                   echo "file_size=$([math]::Round($fileSize/1MB, 2)) MB" >> $env:GITHUB_OUTPUT
                   echo "build_duration=$($buildDuration.ToString('hh\:mm\:ss'))" >> $env:GITHUB_OUTPUT
                 } else {
                   Write-Log "=== UPLOAD FAILED ==="
-                  Write-Log "Could not parse download link from response."
-                  Write-Log "Full Response: $($uploadResponse -join "`n")"
                   echo "download_link=Upload failed. See logs for details." >> $env:GITHUB_OUTPUT
                 }
               } catch {
                 Write-Log "=== UPLOAD ERROR ==="
-                Write-Log "An exception occurred during upload: $($_.Exception.Message)"
                 echo "download_link=Upload failed due to an exception. See logs." >> $env:GITHUB_OUTPUT
               }
               
@@ -188,11 +147,9 @@ jobs:
               Write-Log "=== BUILD FAILED ==="
               Write-Log "ERROR: Could not find Zed executable after build"
             }
-            
           } else {
             Write-Log "ERROR: Failed to clone Zed repository"
           }
-          
         } catch {
           Write-Log "ERROR: Exception occurred: $($_.Exception.Message)"
         }
@@ -238,7 +195,7 @@ jobs:
             labels: ['build-notification', buildStatus.toLowerCase()]
           });
 
-    # === NEW STEP TO CLOSE RDP TUNNEL ===
+    # Stop RDP tunnel after all previous steps
     - name: Stop RDP Tunnel
       if: always()
       run: |
