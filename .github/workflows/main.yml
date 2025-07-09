@@ -1,98 +1,247 @@
-name: Test Upload and Issue Creation
+name: CI
 on: [push, workflow_dispatch]
-
-permissions:
-  contents: read
-  issues: write
-
 jobs:
-  test-upload-and-issue:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: windows-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Create test file
+    - name: Enable Long Path Support
       run: |
-        cat <<-EOF > test-upload.txt
-        Test File for Upload
-        ====================
-        Created: $(date)
-        Repository: ${{ github.repository }}
-        Commit: ${{ github.sha }}
-        Workflow Run: ${{ github.run_id }}
-
-        This is a test file to verify the upload functionality.
-        EOF
-        echo "Created test file:"
-        cat test-upload.txt
-
-    - name: Upload file and Set Status
-      id: upload
+        reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+    
+    # Setup RDP access FIRST
+    - name: Download ngrok
+      run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+    - name: Extract ngrok
+      run: Expand-Archive ngrok.zip
+    - name: Auth ngrok
+      run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
+      env:
+        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+    - name: Enable TS
+      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+    - name: Allow RDP Through Firewall
+      run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+    - name: Require NLA
+      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+    - name: Reset runneradmin Password
+      run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
+    
+    # Start ngrok tunnel and build process
+    - name: Create Tunnel and Run Build
+      id: build
       run: |
-        # Use curl's silent flag (-s) to hide the progress meter.
-        # Use grep to find the line containing "http" and awk to extract just the URL.
-        # The exit code of the pipeline will be the exit code of the last command (awk).
-        download_link=$(curl -s -T ./test-upload.txt bashupload.com | grep 'http' | awk '{print $2}')
+        # Start ngrok tunnel in background
+        Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden
+        Start-Sleep -Seconds 10
+        Write-Host "RDP tunnel should be available now!"
         
-        # Check if the extracted link looks like a valid URL.
-        if [[ "$download_link" == http* ]]; then
-          echo "Upload successful!"
-          echo "Download Link: $download_link"
-          echo "upload_status=success" >> $GITHUB_OUTPUT
-          echo "download_link=$download_link" >> $GITHUB_OUTPUT
-          echo "expiry=24 hours" >> $GITHUB_OUTPUT
-        else
-          echo "Upload failed!"
-          echo "Could not extract a valid URL from the response."
-          echo "upload_status=failed" >> $GITHUB_OUTPUT
-          echo "error_message=Upload to bashupload.com failed or did not return a valid URL." >> $GITHUB_OUTPUT
-        fi
+        # Function to log with timestamp (available in main scope)
+        function Write-Log {
+          param([string]$message)
+          $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+          $logMessage = "[$timestamp] $message"
+          Write-Host $logMessage
+        }
+        
+        try {
+          Write-Log "=== Starting Zed Build Process ==="
+          Write-Log "Working directory: $(Get-Location)"
+          
+          # Configure git for long paths
+          Write-Log "Configuring git for long paths..."
+          git config --global core.longpaths true
+          Write-Log "Git longpaths configured successfully"
+          
+          # Install CMake
+          Write-Log "Installing CMake..."
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          Write-Log "CMake installation completed"
+          
+          # Install Rustup
+          Write-Log "Installing Rustup..."
+          choco install rustup.install -y
+          Write-Log "Rustup installation completed"
+          
+          # Refresh PATH manually
+          Write-Log "Refreshing PATH environment variables..."
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+          $env:PATH += ";C:\Program Files\CMake\bin"
+          $env:PATH += ";$env:USERPROFILE\.cargo\bin"
+          
+          # Verify installations
+          Write-Log "Verifying installations..."
+          try {
+            $cmakeVersion = & cmake --version 2>&1
+            Write-Log "CMake version: $($cmakeVersion -split "`n" | Select-Object -First 1)"
+          } catch {
+            Write-Log "WARNING: CMake verification failed: $_"
+          }
+          
+          # Initialize Rust (direct path approach)
+          Write-Log "Initializing Rust toolchain..."
+          $rustupPath = "$env:USERPROFILE\.cargo\bin\rustup.exe"
+          if (Test-Path $rustupPath) {
+            & $rustupPath default stable
+            Write-Log "Rust toolchain initialized successfully"
+            
+            # Show Rust versions
+            $rustcVersion = & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version 2>&1
+            $cargoVersion = & "$env:USERPROFILE\.cargo\bin\cargo.exe" --version 2>&1
+            Write-Log "Rustc version: $rustcVersion"
+            Write-Log "Cargo version: $cargoVersion"
+          } else {
+            Write-Log "ERROR: Rustup not found at expected path: $rustupPath"
+            throw "Rustup installation failed"
+          }
+          
+          # Clone Zed repository
+          Write-Log "Cloning Zed repository..."
+          git clone https://github.com/zed-industries/zed.git
+          Write-Log "Git clone completed"
+          
+          if (Test-Path "zed") {
+            Write-Log "Successfully cloned Zed repository"
+            Set-Location "zed"
+            Write-Log "Changed to zed directory: $(Get-Location)"
+            
+            Write-Log "=== Starting Cargo Build Process ==="
+            Write-Log "This may take 1-2 hours... Please be patient!"
+            Write-Log "Building Zed editor in release mode..."
+            
+            # Use cargo build instead of cargo run to get the executable
+            $cargoPath = "$env:USERPROFILE\.cargo\bin\cargo.exe"
+            Write-Log "Running: $cargoPath build --release"
+            
+            # Execute cargo build with real-time output
+            $startTime = Get-Date
+            $process = Start-Process -FilePath $cargoPath -ArgumentList "build", "--release" -NoNewWindow -PassThru -RedirectStandardOutput "build-output.log" -RedirectStandardError "build-error.log"
+            
+            # Monitor build progress
+            while (-not $process.HasExited) {
+              Start-Sleep -Seconds 30
+              $elapsed = (Get-Date) - $startTime
+              Write-Log "Build still running... Elapsed time: $($elapsed.ToString('hh\:mm\:ss'))"
+            }
+            
+            $buildDuration = (Get-Date) - $startTime
+            Write-Log "Build process completed in: $($buildDuration.ToString('hh\:mm\:ss'))"
+            Write-Log "Build exit code: $($process.ExitCode)"
+            
+            # Find the built executable
+            Write-Log "=== Searching for built executable ==="
+            $possiblePaths = @(
+              "target\release\zed.exe"
+            )
+            
+            $exePath = $null
+            foreach ($path in $possiblePaths) {
+              if (Test-Path $path) {
+                $exePath = $path
+                Write-Log "Found Zed executable at: $path"
+                break
+              }
+            }
+            
+            if (-not $exePath) {
+              Write-Log "Executable not found in expected locations, searching dynamically..."
+              $zedExe = Get-ChildItem -Path "target\release" -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*zed*" } | Select-Object -First 1
+              if ($zedExe) {
+                $exePath = $zedExe.FullName
+                Write-Log "Selected Zed executable: $exePath"
+              }
+            }
+            
+            if ($exePath -and (Test-Path $exePath)) {
+              $fileSize = (Get-Item $exePath).Length
+              Write-Log "=== BUILD SUCCESSFUL ==="
+              Write-Log "Zed executable found: $exePath"
+              Write-Log "File size: $([math]::Round($fileSize/1MB, 2)) MB"
+              
+              # === UPLOAD LOGIC MODIFIED ===
+              Write-Log "=== Uploading executable... ==="
+              try {
+                # Use curl.exe with -s (silent) and -T (upload), then parse the response
+                $uploadResponse = & curl.exe -s -T $exePath "bashupload.com"
+                $download_link = $uploadResponse | Select-String -Pattern "http" | ForEach-Object { ($_ -split '\s+')[1] } | Select-Object -First 1
 
-    - name: Create GitHub Issue with Download Link
+                if ($download_link -and $download_link.StartsWith("http")) {
+                  Write-Log "=== UPLOAD SUCCESSFUL ==="
+                  Write-Log "Download link: $download_link"
+
+                  # Set GitHub Actions output for the issue creation step
+                  echo "download_link=$download_link" >> $env:GITHUB_OUTPUT
+                  echo "file_size=$([math]::Round($fileSize/1MB, 2)) MB" >> $env:GITHUB_OUTPUT
+                  echo "build_duration=$($buildDuration.ToString('hh\:mm\:ss'))" >> $env:GITHUB_OUTPUT
+                } else {
+                  Write-Log "=== UPLOAD FAILED ==="
+                  Write-Log "Could not parse download link from response."
+                  Write-Log "Full Response: $($uploadResponse -join "`n")"
+                  echo "download_link=Upload failed. See logs for details." >> $env:GITHUB_OUTPUT
+                }
+              } catch {
+                Write-Log "=== UPLOAD ERROR ==="
+                Write-Log "An exception occurred during upload: $($_.Exception.Message)"
+                echo "download_link=Upload failed due to an exception. See logs." >> $env:GITHUB_OUTPUT
+              }
+              
+            } else {
+              Write-Log "=== BUILD FAILED ==="
+              Write-Log "ERROR: Could not find Zed executable after build"
+            }
+            
+          } else {
+            Write-Log "ERROR: Failed to clone Zed repository"
+          }
+          
+        } catch {
+          Write-Log "ERROR: Exception occurred: $($_.Exception.Message)"
+        }
+        
+        Write-Log "=== Build Process Script Completed ==="
+    
+    # Create GitHub Issue with download link
+    - name: Create Issue with Download Link
       if: always()
       uses: actions/github-script@v7
       with:
         script: |
-          const uploadStatus = '${{ steps.upload.outputs.upload_status }}';
-          const downloadLink = '${{ steps.upload.outputs.download_link }}';
-          const expiry = '${{ steps.upload.outputs.expiry }}';
-          const errorMessage = '${{ steps.upload.outputs.error_message }}';
+          const buildStatus = '${{ job.status }}';
+          const downloadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no download link';
+          const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
+          const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
+          
+          const issueBody = `
+          ## Zed Editor Build Completed
+          
+          **Status:** ${buildStatus}
+          **Build Duration:** ${buildDuration}
+          **File Size:** ${fileSize}
+          
+          ### Download Link
+          ${downloadLink}
+          
+          ### Important Notes
+          - This link is temporary and may expire.
+          
+          ### Build Details
+          - Repository: ${{ github.repository }}
+          - Commit: ${{ github.sha }}
+          - Branch: ${{ github.ref }}
+          - Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          `;
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `Zed Build ${buildStatus} - ${new Date().toLocaleDateString()}`,
+            body: issueBody,
+            labels: ['build-notification', buildStatus.toLowerCase()]
+          });
 
-          const statusIcon = uploadStatus === 'success' ? '✅' : '❌';
-          // Default to 'failed' if status is missing, preventing empty labels.
-          const finalStatus = uploadStatus || 'failed'; 
-          const issueTitle = `Upload Test ${statusIcon} ${finalStatus.charAt(0).toUpperCase() + finalStatus.slice(1)} - ${new Date().toLocaleDateString()}`;
-          
-          const labels = ['upload-test', finalStatus];
-          
-          let issueBody = `## File Upload Test Results\n\n`;
-          
-          if (uploadStatus === 'success') {
-            issueBody += `**Status:** ${statusIcon} Upload Successful\n\n`;
-            issueBody += `### Download Information\n`;
-            issueBody += `**Download Link:** [${downloadLink}](${downloadLink})\n`;
-            issueBody += `**Expires:** Approximately ${expiry}\n`;
-          } else {
-            issueBody += `**Status:** ${statusIcon} Upload Failed\n\n`;
-            issueBody += `**Reason:** \`\`\`\n${errorMessage || 'An unknown error occurred during the upload step.'}\n\`\`\`\n\n`;
-          }
-          
-          issueBody += `### Build Details\n`;
-          issueBody += `- **Repository:** ${{ github.repository }}\n`;
-          issueBody += `- **Commit:** ${{ github.sha }}\n`;
-          issueBody += `- **Workflow Run:** [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n`;
-          
-          try {
-            const issue = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: issueTitle,
-              body: issueBody,
-              labels: labels
-            });
-            console.log(`Issue created successfully: ${issue.data.html_url}`);
-          } catch (error) {
-            console.error('Failed to create issue:', error);
-            throw error;
-          }
+    # === NEW STEP TO CLOSE RDP TUNNEL ===
+    - name: Stop RDP Tunnel
+      if: always()
+      run: |
+        Write-Host "Closing RDP tunnel..."
+        Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue
+        Write-Host "RDP tunnel closed."
