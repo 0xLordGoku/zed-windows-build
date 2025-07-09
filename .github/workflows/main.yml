@@ -7,15 +7,14 @@ permissions:
 
 jobs:
   test-upload-and-issue:
-    runs-on: ubuntu-latest # Switched to ubuntu for easier curl/bash scripting
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Create test file
       run: |
-        # Create a simple test file to upload
-        test_content=$(cat <<-END
+        cat <<-EOF > test-upload.txt
         Test File for Upload
         ====================
         Created: $(date)
@@ -24,44 +23,50 @@ jobs:
         Workflow Run: ${{ github.run_id }}
 
         This is a test file to verify the upload functionality.
-        END
-        )
-        echo "$test_content" > test-upload.txt
-        echo "Created test file: test-upload.txt"
+        EOF
+        echo "Created test file:"
         cat test-upload.txt
 
-    - name: Upload file to transfer.sh
+    - name: Upload file and Set Status
       id: upload
       run: |
-        # Upload the file using curl and capture the output (the download link)
-        # transfer.sh keeps files for 14 days
-        download_link=$(curl --upload-file ./test-upload.txt https://transfer.sh/test-upload.txt)
+        # Use a new service and capture all output (stdout and stderr) from curl.
+        # This prevents the step from failing if curl has a network error.
+        response=$(curl -T ./test-upload.txt bashupload.com 2>&1)
         
-        if [[ "$download_link" == https* ]]; then
+        # Check if the response is a valid URL, which indicates success.
+        if [[ "$response" == https* ]]; then
           echo "Upload successful!"
-          echo "Download Link: $download_link"
+          echo "Download Link: $response"
           echo "upload_status=success" >> $GITHUB_OUTPUT
-          echo "download_link=$download_link" >> $GITHUB_OUTPUT
-          echo "expiry=14 days" >> $GITHUB_OUTPUT
+          echo "download_link=$response" >> $GITHUB_OUTPUT
+          echo "expiry=24 hours" >> $GITHUB_OUTPUT # bashupload default expiry
         else
           echo "Upload failed!"
-          echo "Response: $download_link"
+          echo "Error response: $response"
           echo "upload_status=failed" >> $GITHUB_OUTPUT
-          echo "error_message=Failed to upload to transfer.sh. Response: $download_link" >> $GITHUB_OUTPUT
+          # Save the actual curl error message for the issue body.
+          echo "error_message=$response" >> $GITHUB_OUTPUT
         fi
 
     - name: Create GitHub Issue with Download Link
-      if: always() # This step runs even if the upload fails to report the status
+      if: always()
       uses: actions/github-script@v7
       with:
         script: |
           const uploadStatus = '${{ steps.upload.outputs.upload_status }}';
           const downloadLink = '${{ steps.upload.outputs.download_link }}';
           const expiry = '${{ steps.upload.outputs.expiry }}';
-          const errorMessage = '${{ steps.upload.outputs.error_message }}';
+          const errorMessage = `${{ steps.upload.outputs.error_message }}`.trim();
 
           const statusIcon = uploadStatus === 'success' ? '✅' : '❌';
-          const issueTitle = `Upload Test ${statusIcon} ${uploadStatus.charAt(0).toUpperCase() + uploadStatus.slice(1)} - ${new Date().toLocaleDateString()}`;
+          const issueTitle = `Upload Test ${statusIcon} ${uploadStatus || 'unknown'} - ${new Date().toLocaleDateString()}`;
+
+          // **FIX:** Create a base label array and only add the status if it's not empty.
+          const labels = ['upload-test'];
+          if (uploadStatus) {
+            labels.push(uploadStatus);
+          }
           
           let issueBody = `## File Upload Test Results\n\n`;
           
@@ -69,22 +74,16 @@ jobs:
             issueBody += `**Status:** ${statusIcon} Upload Successful\n\n`;
             issueBody += `### Download Information\n`;
             issueBody += `**Download Link:** ${downloadLink}\n`;
-            issueBody += `**Expires:** ${expiry}\n\n`;
-            issueBody += `### Important Notes\n`;
-            issueBody += `- This link is hosted on transfer.sh.\n`;
-            issueBody += `- File will be available for 14 days.\n`;
+            issueBody += `**Expires:** Approximately ${expiry}\n`;
           } else {
             issueBody += `**Status:** ${statusIcon} Upload Failed\n\n`;
-            issueBody += `**Reason:** \`\`\`\n${errorMessage || 'No error message provided.'}\n\`\`\`\n\n`;
+            issueBody += `**Reason:** \`\`\`\n${errorMessage || 'No error message available.'}\n\`\`\`\n\n`;
           }
           
           issueBody += `### Build Details\n`;
           issueBody += `- **Repository:** ${{ github.repository }}\n`;
           issueBody += `- **Commit:** ${{ github.sha }}\n`;
-          issueBody += `- **Branch:** ${{ github.ref }}\n`;
           issueBody += `- **Workflow Run:** [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n`;
-          issueBody += `- **Triggered by:** ${{ github.event_name }}\n`;
-          issueBody += `- **Actor:** @${{ github.actor }}\n`;
           
           try {
             const issue = await github.rest.issues.create({
@@ -92,9 +91,8 @@ jobs:
               repo: context.repo.repo,
               title: issueTitle,
               body: issueBody,
-              labels: ['upload-test', uploadStatus]
+              labels: labels // Use the safely constructed labels array
             });
-            
             console.log(`Issue created successfully: ${issue.data.html_url}`);
           } catch (error) {
             console.error('Failed to create issue:', error);
