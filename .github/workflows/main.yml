@@ -6,6 +6,12 @@ permissions:
   issues: write
   contents: read # Good practice to keep for actions/checkout
 
+# === BUILD CONFIGURATION ===
+env:
+  # Change these variables to build from different branch/tag
+  BUILD_TARGET: "v0.202.1-pre"           # Can be: branch name, tag name, or commit hash
+  BUILD_TYPE: "tag"           # Can be: "branch" or "tag"
+
 jobs:
   build:
     runs-on: windows-latest
@@ -52,6 +58,8 @@ jobs:
         try {
           Write-Log "=== Starting Zed Build Process ==="
           Write-Log "Working directory: $(Get-Location)"
+          Write-Log "Build Target: $env:BUILD_TARGET"
+          Write-Log "Build Type: $env:BUILD_TYPE"
           
           # Configure git for long paths
           Write-Log "Configuring git for long paths..."
@@ -95,6 +103,44 @@ jobs:
             Set-Location "zed"
             Write-Log "Changed to zed directory: $(Get-Location)"
             
+            # Checkout specific branch or tag
+            Write-Log "=== Checking out $env:BUILD_TYPE`: $env:BUILD_TARGET ==="
+            if ($env:BUILD_TYPE -eq "tag") {
+              Write-Log "Checking out tag: $env:BUILD_TARGET"
+              git checkout "tags/$env:BUILD_TARGET"
+            } else {
+              Write-Log "Checking out branch/commit: $env:BUILD_TARGET"
+              git checkout $env:BUILD_TARGET
+            }
+            
+            # Get version information
+            $currentCommit = git rev-parse HEAD
+            $currentCommitShort = git rev-parse --short HEAD
+            Write-Log "Current commit: $currentCommit"
+            
+            # Try to get version from Cargo.toml
+            $version = "Unknown"
+            if (Test-Path "crates\zed\Cargo.toml") {
+              $cargoContent = Get-Content "crates\zed\Cargo.toml" -Raw
+              if ($cargoContent -match 'version\s*=\s*"([^"]+)"') {
+                $version = $matches[1]
+                Write-Log "Found version in Cargo.toml: $version"
+              }
+            }
+            
+            # Try to get tag if we're on a tagged commit
+            $tagInfo = git describe --tags --exact-match 2>$null
+            if ($tagInfo) {
+              $version = $tagInfo
+              Write-Log "Using git tag as version: $version"
+            }
+            
+            # Set build info for later use
+            echo "zed_version=$version" >> $env:GITHUB_OUTPUT
+            echo "commit_hash=$currentCommitShort" >> $env:GITHUB_OUTPUT
+            echo "build_target=$env:BUILD_TARGET" >> $env:GITHUB_OUTPUT
+            echo "build_type=$env:BUILD_TYPE" >> $env:GITHUB_OUTPUT
+            
             Write-Log "=== Starting Cargo Build Process ==="
             $cargoPath = "$env:USERPROFILE\.cargo\bin\cargo.exe"
             
@@ -121,6 +167,8 @@ jobs:
               Write-Log "=== BUILD SUCCESSFUL ==="
               Write-Log "Zed executable found: $exePath"
               Write-Log "File size: $([math]::Round($fileSize/1MB, 2)) MB"
+              Write-Log "Version: $version"
+              Write-Log "Commit: $currentCommitShort"
               
               # Upload logic
               Write-Log "=== Uploading executable... ==="
@@ -155,6 +203,9 @@ jobs:
         }
         
         Write-Log "=== Build Process Script Completed ==="
+      env:
+        BUILD_TARGET: ${{ env.BUILD_TARGET }}
+        BUILD_TYPE: ${{ env.BUILD_TYPE }}
     
     # Create GitHub Issue with download link
     - name: Create Issue with Download Link
@@ -166,11 +217,18 @@ jobs:
           const downloadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no download link';
           const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
           const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
+          const zedVersion = '${{ steps.build.outputs.zed_version }}' || 'Unknown';
+          const commitHash = '${{ steps.build.outputs.commit_hash }}' || 'Unknown';
+          const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
+          const buildType = '${{ steps.build.outputs.build_type }}' || '${{ env.BUILD_TYPE }}';
           
           const issueBody = `
           ## Zed Editor Build Completed
           
           **Status:** ${buildStatus}
+          **Version:** ${zedVersion}
+          **Build Target:** ${buildTarget} (${buildType})
+          **Commit Hash:** ${commitHash}
           **Build Duration:** ${buildDuration}
           **File Size:** ${fileSize}
           
@@ -179,6 +237,8 @@ jobs:
           
           ### Important Notes
           - This link is temporary and may expire.
+          - Built from ${buildType}: \`${buildTarget}\`
+          - Zed version: \`${zedVersion}\`
           
           ### Build Details
           - Repository: ${{ github.repository }}
@@ -187,10 +247,12 @@ jobs:
           - Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           `;
           
+          const titleSuffix = zedVersion !== 'Unknown' ? ` (${zedVersion})` : '';
+          
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: `Zed Build ${buildStatus} - ${new Date().toLocaleDateString()}`,
+            title: `Zed Build ${buildStatus} - ${buildTarget}${titleSuffix} - ${new Date().toLocaleDateString()}`,
             body: issueBody,
             labels: ['build-notification', buildStatus.toLowerCase()]
           });
