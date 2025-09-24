@@ -82,7 +82,7 @@ jobs:
           $env:PATH += ";C:\Program Files\CMake\bin"
           $env:PATH += ";$env:USERPROFILE\.cargo\bin"
           
-          # Initialize Rust (direct path approach)
+          # Initialize Rust toolchain
           Write-Log "Initializing Rust toolchain..."
           $rustupPath = "$env:USERPROFILE\.cargo\bin\rustup.exe"
           if (Test-Path $rustupPath) {
@@ -122,7 +122,7 @@ jobs:
             $version = "Unknown"
             if (Test-Path "crates\zed\Cargo.toml") {
               $cargoContent = Get-Content "crates\zed\Cargo.toml" -Raw
-              if ($cargoContent -match 'version\s*=\s*"([^"]+)"') {
+              if ($cargoContent -match 'version\s*=\s*"([^"]+)") {
                 $version = $matches[1]
                 Write-Log "Found version in Cargo.toml: $version"
               }
@@ -164,32 +164,57 @@ jobs:
             
             if (Test-Path $exePath) {
               $fileSize = (Get-Item $exePath).Length
+              $fileSizeMb = [math]::Round($fileSize/1MB, 2)
               Write-Log "=== BUILD SUCCESSFUL ==="
               Write-Log "Zed executable found: $exePath"
-              Write-Log "File size: $([math]::Round($fileSize/1MB, 2)) MB"
+              Write-Log "File size: $fileSizeMb MB"
               Write-Log "Version: $version"
               Write-Log "Commit: $currentCommitShort"
               
-              # Upload logic
-              Write-Log "=== Uploading executable... ==="
+              # Upload to Bashupload
+              Write-Log "=== Uploading executable to Bashupload... ==="
+              $bashUploadLink = "Upload failed. See logs for details."
               try {
                 $uploadResponse = & curl.exe -s -T $exePath "bashupload.com"
                 $download_link = $uploadResponse | Select-String -Pattern "http" | ForEach-Object { ($_ -split '\s+')[1] } | Select-Object -First 1
-
                 if ($download_link -and $download_link.StartsWith("http")) {
-                  Write-Log "=== UPLOAD SUCCESSFUL ==="
+                  Write-Log "=== BASHUPLOAD SUCCESSFUL ==="
                   Write-Log "Download link: $download_link"
-                  echo "download_link=$download_link" >> $env:GITHUB_OUTPUT
-                  echo "file_size=$([math]::Round($fileSize/1MB, 2)) MB" >> $env:GITHUB_OUTPUT
-                  echo "build_duration=$($buildDuration.ToString('hh\:mm\:ss'))" >> $env:GITHUB_OUTPUT
+                  $bashUploadLink = $download_link
                 } else {
-                  Write-Log "=== UPLOAD FAILED ==="
-                  echo "download_link=Upload failed. See logs for details." >> $env:GITHUB_OUTPUT
+                  Write-Log "=== BASHUPLOAD FAILED ==="
+                  Write-Log "Could not parse download link from response."
                 }
               } catch {
-                Write-Log "=== UPLOAD ERROR ==="
-                echo "download_link=Upload failed due to an exception. See logs." >> $env:GITHUB_OUTPUT
+                Write-Log "=== BASHUPLOAD ERROR ==="
+                Write-Log "Exception: $($_.Exception.Message)"
               }
+              echo "download_link=$bashUploadLink" >> $env:GITHUB_OUTPUT
+              echo "file_size=$fileSizeMb MB" >> $env:GITHUB_OUTPUT
+              echo "build_duration=$($buildDuration.ToString('hh\:mm\:ss'))" >> $env:GITHUB_OUTPUT
+              
+              # Upload to Filebin
+              Write-Log "=== Uploading executable to Filebin... ==="
+              $filebinLinkOutput = "Upload failed. See logs for details."
+              try {
+                $filebinBin = [Guid]::NewGuid().ToString("n")
+                $filebinFileName = "zed-$currentCommitShort.exe"
+                $filebinUrl = "https://filebin.net/$filebinBin/$filebinFileName"
+                $statusCode = & curl.exe -s -o nul -w "%{http_code}" -T $exePath $filebinUrl
+                Write-Log "Filebin response status code: $statusCode"
+                if ($LASTEXITCODE -eq 0 -and ($statusCode -eq "201" -or $statusCode -eq "200")) {
+                  Write-Log "=== FILEBIN UPLOAD SUCCESSFUL ==="
+                  Write-Log "Filebin link: $filebinUrl"
+                  $filebinLinkOutput = $filebinUrl
+                  echo "filebin_bin=$filebinBin" >> $env:GITHUB_OUTPUT
+                } else {
+                  Write-Log "=== FILEBIN UPLOAD FAILED ==="
+                }
+              } catch {
+                Write-Log "=== FILEBIN UPLOAD ERROR ==="
+                Write-Log "Exception: $($_.Exception.Message)"
+              }
+              echo "filebin_link=$filebinLinkOutput" >> $env:GITHUB_OUTPUT
               
             } else {
               Write-Log "=== BUILD FAILED ==="
@@ -214,13 +239,15 @@ jobs:
       with:
         script: |
           const buildStatus = '${{ job.status }}';
-          const downloadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no download link';
+          const bashuploadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no Bashupload link';
+          const filebinLink = '${{ steps.build.outputs.filebin_link }}' || 'Build failed - no Filebin link';
           const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
           const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
           const zedVersion = '${{ steps.build.outputs.zed_version }}' || 'Unknown';
           const commitHash = '${{ steps.build.outputs.commit_hash }}' || 'Unknown';
           const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
           const buildType = '${{ steps.build.outputs.build_type }}' || '${{ env.BUILD_TYPE }}';
+          const filebinBin = '${{ steps.build.outputs.filebin_bin }}' || 'N/A';
           
           const issueBody = `
           ## Zed Editor Build Completed
@@ -232,11 +259,16 @@ jobs:
           **Build Duration:** ${buildDuration}
           **File Size:** ${fileSize}
           
-          ### Download Link
-          ${downloadLink}
+          ### Download Links
+          - Bashupload: ${bashuploadLink}
+          - Filebin: ${filebinLink}
+          
+          ### Filebin Details
+          - Bin ID: ${filebinBin}
+          - Direct Download: ${filebinLink}
           
           ### Important Notes
-          - This link is temporary and may expire.
+          - These links are temporary and may expire.
           - Built from ${buildType}: \`${buildTarget}\`
           - Zed version: \`${zedVersion}\`
           
