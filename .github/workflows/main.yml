@@ -104,7 +104,7 @@ jobs:
             Write-Log "Changed to zed directory: $(Get-Location)"
             
             # Checkout specific branch or tag
-            Write-Log "=== Checking out $env:BUILD_TYPE`: $env:BUILD_TARGET ==="
+            Write-Log "=== Checking out $env:BUILD_TYPE: $env:BUILD_TARGET ==="
             if ($env:BUILD_TYPE -eq "tag") {
               Write-Log "Checking out tag: $env:BUILD_TARGET"
               git checkout "tags/$env:BUILD_TARGET"
@@ -122,7 +122,7 @@ jobs:
             $version = "Unknown"
             if (Test-Path "crates\zed\Cargo.toml") {
               $cargoContent = Get-Content "crates\zed\Cargo.toml" -Raw
-              if ($cargoContent -match 'version\s*=\s*"([^"]+)") {
+              if ($cargoContent -match 'version\s*=\s*"([^"]+)"') {
                 $version = $matches[1]
                 Write-Log "Found version in Cargo.toml: $version"
               }
