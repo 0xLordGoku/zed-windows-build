@@ -196,25 +196,30 @@ jobs:
               # Upload to Filebin
               Write-Log "=== Uploading executable to Filebin... ==="
               $filebinLinkOutput = "Upload failed. See logs for details."
+              $filebinBinOutput = "N/A"
               try {
                 $filebinBin = [Guid]::NewGuid().ToString("n")
                 $filebinFileName = "zed-$currentCommitShort.exe"
                 $filebinUrl = "https://filebin.net/$filebinBin/$filebinFileName"
+                Write-Log "Attempting filebin upload to: $filebinUrl"
                 $statusCode = & curl.exe -s -o nul -w "%{http_code}" -T $exePath $filebinUrl
                 Write-Log "Filebin response status code: $statusCode"
+                Write-Log "Curl exit code: $LASTEXITCODE"
                 if ($LASTEXITCODE -eq 0 -and ($statusCode -eq "201" -or $statusCode -eq "200")) {
                   Write-Log "=== FILEBIN UPLOAD SUCCESSFUL ==="
                   Write-Log "Filebin link: $filebinUrl"
                   $filebinLinkOutput = $filebinUrl
-                  echo "filebin_bin=$filebinBin" >> $env:GITHUB_OUTPUT
+                  $filebinBinOutput = $filebinBin
                 } else {
                   Write-Log "=== FILEBIN UPLOAD FAILED ==="
+                  Write-Log "Status code: $statusCode, Exit code: $LASTEXITCODE"
                 }
               } catch {
                 Write-Log "=== FILEBIN UPLOAD ERROR ==="
                 Write-Log "Exception: $($_.Exception.Message)"
               }
               echo "filebin_link=$filebinLinkOutput" >> $env:GITHUB_OUTPUT
+              echo "filebin_bin=$filebinBinOutput" >> $env:GITHUB_OUTPUT
               
             } else {
               Write-Log "=== BUILD FAILED ==="
@@ -238,56 +243,60 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          const buildStatus = '${{ job.status }}';
-          const bashuploadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no Bashupload link';
-          const filebinLink = '${{ steps.build.outputs.filebin_link }}' || 'Build failed - no Filebin link';
-          const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
-          const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
-          const zedVersion = '${{ steps.build.outputs.zed_version }}' || 'Unknown';
-          const commitHash = '${{ steps.build.outputs.commit_hash }}' || 'Unknown';
-          const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
-          const buildType = '${{ steps.build.outputs.build_type }}' || '${{ env.BUILD_TYPE }}';
-          const filebinBin = '${{ steps.build.outputs.filebin_bin }}' || 'N/A';
-          
-          const issueBody = `
-          ## Zed Editor Build Completed
-          
-          **Status:** ${buildStatus}
-          **Version:** ${zedVersion}
-          **Build Target:** ${buildTarget} (${buildType})
-          **Commit Hash:** ${commitHash}
-          **Build Duration:** ${buildDuration}
-          **File Size:** ${fileSize}
-          
-          ### Download Links
-          - Bashupload: ${bashuploadLink}
-          - Filebin: ${filebinLink}
-          
-          ### Filebin Details
-          - Bin ID: ${filebinBin}
-          - Direct Download: ${filebinLink}
-          
-          ### Important Notes
-          - These links are temporary and may expire.
-          - Built from ${buildType}: \`${buildTarget}\`
-          - Zed version: \`${zedVersion}\`
-          
-          ### Build Details
-          - Repository: ${{ github.repository }}
-          - Commit: ${{ github.sha }}
-          - Branch: ${{ github.ref }}
-          - Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          `;
-          
-          const titleSuffix = zedVersion !== 'Unknown' ? ` (${zedVersion})` : '';
-          
-          await github.rest.issues.create({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            title: `Zed Build ${buildStatus} - ${buildTarget}${titleSuffix} - ${new Date().toLocaleDateString()}`,
-            body: issueBody,
-            labels: ['build-notification', buildStatus.toLowerCase()]
-          });
+          try {
+            const buildStatus = '${{ job.status }}';
+            const bashuploadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no Bashupload link';
+            const filebinLink = '${{ steps.build.outputs.filebin_link }}' || 'Build failed - no Filebin link';
+            const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
+            const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
+            const zedVersion = '${{ steps.build.outputs.zed_version }}' || 'Unknown';
+            const commitHash = '${{ steps.build.outputs.commit_hash }}' || 'Unknown';
+            const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
+            const buildType = '${{ steps.build.outputs.build_type }}' || '${{ env.BUILD_TYPE }}';
+            const filebinBin = '${{ steps.build.outputs.filebin_bin }}' || 'N/A';
+            
+            // Sanitize strings to avoid issues
+            const sanitizeString = (str) => String(str || 'Unknown').replace(/[^\w\s\-\.\(\)\/\:]/g, '');
+            
+            const issueBody = `## Zed Editor Build Completed
+
+**Status:** ${sanitizeString(buildStatus)}
+**Version:** ${sanitizeString(zedVersion)}
+**Build Target:** ${sanitizeString(buildTarget)} (${sanitizeString(buildType)})
+**Commit Hash:** ${sanitizeString(commitHash)}
+**Build Duration:** ${sanitizeString(buildDuration)}
+**File Size:** ${sanitizeString(fileSize)}
+
+### Download Links
+- Bashupload: ${bashuploadLink}
+- Filebin: ${filebinLink}
+
+### Filebin Details  
+- Bin ID: ${sanitizeString(filebinBin)}
+
+### Build Details
+- Repository: ${{ github.repository }}
+- Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            
+            const titleSuffix = zedVersion !== 'Unknown' ? ` (${sanitizeString(zedVersion)})` : '';
+            const issueTitle = `Zed Build ${sanitizeString(buildStatus)} - ${sanitizeString(buildTarget)}${titleSuffix} - ${new Date().toLocaleDateString()}`;
+            
+            console.log('Creating issue with title:', issueTitle);
+            console.log('Issue body length:', issueBody.length);
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body: issueBody,
+              labels: ['build-notification', buildStatus.toLowerCase()]
+            });
+            
+            console.log('Issue created successfully');
+          } catch (error) {
+            console.error('Failed to create issue:', error);
+            core.setFailed(`Issue creation failed: ${error.message}`);
+          }
 
     # Stop RDP tunnel after all previous steps
     - name: Stop RDP Tunnel
