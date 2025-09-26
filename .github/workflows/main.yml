@@ -245,40 +245,25 @@ jobs:
         script: |
           try {
             const buildStatus = '${{ job.status }}';
-            const bashuploadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed - no Bashupload link';
-            const filebinLink = '${{ steps.build.outputs.filebin_link }}' || 'Build failed - no Filebin link';
+            const bashuploadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed';
+            const filebinLink = '${{ steps.build.outputs.filebin_link }}' || 'Build failed';
             const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
             const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
             const zedVersion = '${{ steps.build.outputs.zed_version }}' || 'Unknown';
             const commitHash = '${{ steps.build.outputs.commit_hash }}' || 'Unknown';
             const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
-            const buildType = '${{ steps.build.outputs.build_type }}' || '${{ env.BUILD_TYPE }}';
-            const filebinBin = '${{ steps.build.outputs.filebin_bin }}' || 'N/A';
             
-            // Sanitize strings to avoid issues
-            const sanitizeString = (str) => String(str || 'Unknown').replace(/[^\\w\\s\\-\\.\\(\\)\\/\\:]/g, '');
-            
-            const issueBody = '## Zed Editor Build Completed\\n\\n' +
-              '**Status:** ' + sanitizeString(buildStatus) + '\\n' +
-              '**Version:** ' + sanitizeString(zedVersion) + '\\n' +
-              '**Build Target:** ' + sanitizeString(buildTarget) + ' (' + sanitizeString(buildType) + ')\\n' +
-              '**Commit Hash:** ' + sanitizeString(commitHash) + '\\n' +
-              '**Build Duration:** ' + sanitizeString(buildDuration) + '\\n' +
-              '**File Size:** ' + sanitizeString(fileSize) + '\\n\\n' +
-              '### Download Links\\n' +
+            const issueBody = '**Zed Build Complete**\\n\\n' +
+              'Status: ' + buildStatus + '\\n' +
+              'Version: ' + zedVersion + '\\n' +
+              'Target: ' + buildTarget + '\\n' +
+              'Duration: ' + buildDuration + '\\n' +
+              'Size: ' + fileSize + '\\n\\n' +
+              'Downloads:\\n' +
               '- Bashupload: ' + bashuploadLink + '\\n' +
-              '- Filebin: ' + filebinLink + '\\n\\n' +
-              '### Filebin Details\\n' +
-              '- Bin ID: ' + sanitizeString(filebinBin) + '\\n\\n' +
-              '### Build Details\\n' +
-              '- Repository: ${{ github.repository }}\\n' +
-              '- Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}';
+              '- Filebin: ' + filebinLink;
             
-            const titleSuffix = zedVersion !== 'Unknown' ? (' (' + sanitizeString(zedVersion) + ')') : '';
-            const issueTitle = 'Zed Build ' + sanitizeString(buildStatus) + ' - ' + sanitizeString(buildTarget) + titleSuffix + ' - ' + new Date().toLocaleDateString();
-            
-            console.log('Creating issue with title:', issueTitle);
-            console.log('Issue body length:', issueBody.length);
+            const issueTitle = 'Zed Build ' + buildStatus + ' - ' + buildTarget + ' (' + zedVersion + ')';
             
             await github.rest.issues.create({
               owner: context.repo.owner,
@@ -288,7 +273,6 @@ jobs:
               labels: ['build-notification', buildStatus.toLowerCase()]
             });
             
-            console.log('Issue created successfully');
           } catch (error) {
             console.error('Failed to create issue:', error);
             core.setFailed('Issue creation failed: ' + error.message);
