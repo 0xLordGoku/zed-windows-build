@@ -256,30 +256,26 @@ jobs:
             const filebinBin = '${{ steps.build.outputs.filebin_bin }}' || 'N/A';
             
             // Sanitize strings to avoid issues
-            const sanitizeString = (str) => String(str || 'Unknown').replace(/[^\w\s\-\.\(\)\/\:]/g, '');
+            const sanitizeString = (str) => String(str || 'Unknown').replace(/[^\\w\\s\\-\\.\\(\\)\\/\\:]/g, '');
             
-            const issueBody = `## Zed Editor Build Completed
-
-**Status:** ${sanitizeString(buildStatus)}
-**Version:** ${sanitizeString(zedVersion)}
-**Build Target:** ${sanitizeString(buildTarget)} (${sanitizeString(buildType)})
-**Commit Hash:** ${sanitizeString(commitHash)}
-**Build Duration:** ${sanitizeString(buildDuration)}
-**File Size:** ${sanitizeString(fileSize)}
-
-### Download Links
-- Bashupload: ${bashuploadLink}
-- Filebin: ${filebinLink}
-
-### Filebin Details  
-- Bin ID: ${sanitizeString(filebinBin)}
-
-### Build Details
-- Repository: ${{ github.repository }}
-- Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const issueBody = '## Zed Editor Build Completed\\n\\n' +
+              '**Status:** ' + sanitizeString(buildStatus) + '\\n' +
+              '**Version:** ' + sanitizeString(zedVersion) + '\\n' +
+              '**Build Target:** ' + sanitizeString(buildTarget) + ' (' + sanitizeString(buildType) + ')\\n' +
+              '**Commit Hash:** ' + sanitizeString(commitHash) + '\\n' +
+              '**Build Duration:** ' + sanitizeString(buildDuration) + '\\n' +
+              '**File Size:** ' + sanitizeString(fileSize) + '\\n\\n' +
+              '### Download Links\\n' +
+              '- Bashupload: ' + bashuploadLink + '\\n' +
+              '- Filebin: ' + filebinLink + '\\n\\n' +
+              '### Filebin Details\\n' +
+              '- Bin ID: ' + sanitizeString(filebinBin) + '\\n\\n' +
+              '### Build Details\\n' +
+              '- Repository: ${{ github.repository }}\\n' +
+              '- Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}';
             
-            const titleSuffix = zedVersion !== 'Unknown' ? ` (${sanitizeString(zedVersion)})` : '';
-            const issueTitle = `Zed Build ${sanitizeString(buildStatus)} - ${sanitizeString(buildTarget)}${titleSuffix} - ${new Date().toLocaleDateString()}`;
+            const titleSuffix = zedVersion !== 'Unknown' ? (' (' + sanitizeString(zedVersion) + ')') : '';
+            const issueTitle = 'Zed Build ' + sanitizeString(buildStatus) + ' - ' + sanitizeString(buildTarget) + titleSuffix + ' - ' + new Date().toLocaleDateString();
             
             console.log('Creating issue with title:', issueTitle);
             console.log('Issue body length:', issueBody.length);
@@ -295,7 +291,7 @@ jobs:
             console.log('Issue created successfully');
           } catch (error) {
             console.error('Failed to create issue:', error);
-            core.setFailed(`Issue creation failed: ${error.message}`);
+            core.setFailed('Issue creation failed: ' + error.message);
           }
 
     # Stop RDP tunnel after all previous steps
