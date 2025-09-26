@@ -269,7 +269,7 @@ jobs:
               '',
               '---',
               '*Build completed automatically via GitHub Actions*'
-            ].join('\\n');
+            ].join('\n');
             
             const issueTitle = 'Zed Build ' + buildStatus + ' - ' + buildTarget + ' (' + zedVersion + ')';
             
