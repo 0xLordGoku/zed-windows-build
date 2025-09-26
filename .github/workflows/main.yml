@@ -253,17 +253,23 @@ jobs:
             const commitHash = '${{ steps.build.outputs.commit_hash }}' || 'Unknown';
             const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
             
-            const issueBody = '## 🔨 Zed Editor Build Complete\\n\\n' +
-              '**📋 Build Status:** `' + buildStatus + '`\\n' +
-              '**🏷️ Version:** `' + zedVersion + '`\\n' +
-              '**🎯 Target:** `' + buildTarget + '`\\n' +
-              '**⏱️ Duration:** `' + buildDuration + '`\\n' +
-              '**📦 Size:** `' + fileSize + '`\\n\\n' +
-              '### 📥 Download Links\\n\\n' +
-              '- **Bashupload:** ' + bashuploadLink + '\\n' +
-              '- **Filebin:** ' + filebinLink + '\\n\\n' +
-              '---\\n' +
-              '*Build completed automatically via GitHub Actions*';
+            const issueBody = [
+              '## 🔨 Zed Editor Build Complete',
+              '',
+              '**📋 Build Status:** `' + buildStatus + '`',
+              '**🏷️ Version:** `' + zedVersion + '`', 
+              '**🎯 Target:** `' + buildTarget + '`',
+              '**⏱️ Duration:** `' + buildDuration + '`',
+              '**📦 Size:** `' + fileSize + '`',
+              '',
+              '### 📥 Download Links',
+              '',
+              '- **Bashupload:** ' + bashuploadLink,
+              '- **Filebin:** ' + filebinLink,
+              '',
+              '---',
+              '*Build completed automatically via GitHub Actions*'
+            ].join('\\n');
             
             const issueTitle = 'Zed Build ' + buildStatus + ' - ' + buildTarget + ' (' + zedVersion + ')';
             
