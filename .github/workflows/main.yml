@@ -1,114 +1,19 @@
 name: CI
 on: [push, workflow_dispatch]
 
-# === FIX: ADD PERMISSIONS BLOCK ===
+# === PERMISSIONS ===
 permissions:
-  issues: write
-  contents: write  # Added for creating releases
-  # Good practice to keep for actions/checkout
+  contents: write  # Required for creating releases
 
 # === BUILD CONFIGURATION ===
 env:
   # Change these variables to build from different branch/tag
-  BUILD_TARGET: "v0.206.0-pre"           # Can be: branch name, tag name, or commit hash
+  BUILD_TARGET: "v0.205.8"           # Can be: branch name, tag name, or commit hash
   BUILD_TYPE: "tag"           # Can be: "branch" or "tag"
 
 jobs:
-  # === TEST JOB: Quick release test with text file ===
-  test-release:
-    runs-on: windows-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Create test file
-      run: |
-        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        $content = @"
-        Test Release Upload
-        ===================
-        Timestamp: $timestamp
-        Build Target: $env:BUILD_TARGET
-        Build Type: $env:BUILD_TYPE
-        Workflow Run: ${{ github.run_number }}
-        
-        This is a test file to verify GitHub release creation works.
-        "@
-        
-        Set-Content -Path "test-release.txt" -Value $content
-        Write-Host "Test file created:"
-        Get-Content "test-release.txt"
-      env:
-        BUILD_TARGET: ${{ env.BUILD_TARGET }}
-        BUILD_TYPE: ${{ env.BUILD_TYPE }}
-    
-    - name: Create GitHub Release with Test File
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require('fs');
-          const path = require('path');
-          
-          try {
-            // Generate unique tag name
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-            const tagName = `test-release-${timestamp}`;
-            const releaseName = `Test Release - ${timestamp}`;
-            
-            console.log(`Creating release with tag: ${tagName}`);
-            
-            // Step 1: Create the release
-            const createReleaseResponse = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tagName,
-              name: releaseName,
-              body: `## 🧪 Test Release\n\nThis is a test release to verify the upload functionality.\n\n**Build Target:** \`${{ env.BUILD_TARGET }}\`\n**Build Type:** \`${{ env.BUILD_TYPE }}\`\n**Workflow Run:** #${{ github.run_number }}`,
-              draft: false,
-              prerelease: true
-            });
-            
-            console.log(`Release created successfully. ID: ${createReleaseResponse.data.id}`);
-            console.log(`Release URL: ${createReleaseResponse.data.html_url}`);
-            
-            const releaseId = createReleaseResponse.data.id;
-            const uploadUrl = createReleaseResponse.data.upload_url;
-            
-            // Step 2: Read the test file
-            const filePath = 'test-release.txt';
-            const fileContent = fs.readFileSync(filePath);
-            const fileName = path.basename(filePath);
-            
-            console.log(`Uploading asset: ${fileName}`);
-            
-            // Step 3: Upload the asset
-            const uploadResponse = await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseId,
-              name: fileName,
-              data: fileContent
-            });
-            
-            console.log(`Asset uploaded successfully!`);
-            console.log(`Download URL: ${uploadResponse.data.browser_download_url}`);
-            
-            // Output summary
-            core.summary
-              .addHeading('✅ Test Release Created Successfully')
-              .addLink('View Release', createReleaseResponse.data.html_url)
-              .addLink('Download Test File', uploadResponse.data.browser_download_url)
-              .write();
-            
-          } catch (error) {
-            console.error('Failed to create release:', error);
-            core.setFailed(`Release creation failed: ${error.message}`);
-          }
-
-  # === MAIN BUILD JOB ===
   build:
     runs-on: windows-latest
-    needs: test-release  # Only run if test-release succeeds
     steps:
     - name: Enable Long Path Support
       run: |
@@ -392,53 +297,6 @@ jobs:
           } catch (error) {
             console.error('Failed to create release:', error);
             core.setFailed(`Release creation failed: ${error.message}`);
-          }
-    
-    # Create GitHub Issue (fallback notification)
-    - name: Create Issue with Build Status
-      if: always()
-      uses: actions/github-script@v7
-      with:
-        script: |
-          try {
-            const buildStatus = '${{ job.status }}';
-            const buildSuccess = '${{ steps.build.outputs.build_success }}';
-            const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
-            const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
-            const zedVersion = '${{ steps.build.outputs.zed_version }}' || 'Unknown';
-            const commitHash = '${{ steps.build.outputs.commit_hash }}' || 'Unknown';
-            const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
-            
-            const issueBody = [
-              '## 🔨 Zed Editor Build Status',
-              '',
-              '**📋 Status:** `' + buildStatus + '`',
-              '**✅ Build Success:** `' + buildSuccess + '`',
-              '**🏷️ Version:** `' + zedVersion + '`', 
-              '**🎯 Target:** `' + buildTarget + '`',
-              '**📝 Commit:** `' + commitHash + '`',
-              '**⏱️ Duration:** `' + buildDuration + '`',
-              '**📦 Size:** `' + fileSize + '`',
-              '',
-              buildSuccess === 'true' ? '### 📥 Download\nCheck the [Releases page](../../releases) for the build artifact.' : '### ❌ Build Failed\nCheck the workflow logs for details.',
-              '',
-              '---',
-              '*Build completed automatically via GitHub Actions*'
-            ].join('\n');
-            
-            const issueTitle = 'Zed Build ' + buildStatus + ' - ' + buildTarget + ' (' + zedVersion + ')';
-            
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: issueTitle,
-              body: issueBody,
-              labels: ['build-notification', buildStatus.toLowerCase()]
-            });
-            
-          } catch (error) {
-            console.error('Failed to create issue:', error);
-            core.setFailed('Issue creation failed: ' + error.message);
           }
 
     # Stop RDP tunnel after all previous steps
