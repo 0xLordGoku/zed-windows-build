@@ -2,7 +2,7 @@
 
 Automated Windows builds of the [Zed editor](https://github.com/zed-industries/zed) using GitHub Actions.
 
-[![Build Status](https://github.com/0xLordGoku/zed-windows-build/actions/workflows/ci.yml/badge.svg)](https://github.com/0xLordGoku/zed-windows-build/actions/workflows/ci.yml)
+[![Build Status](https://github.com/0xLordGoku/zed-windows-build/actions/workflows/main.yml/badge.svg)](https://github.com/0xLordGoku/zed-windows-build/actions/workflows/main.yml)
 [![Latest Release](https://img.shields.io/github/v/release/0xLordGoku/zed-windows-build?label=latest%20build)](https://github.com/0xLordGoku/zed-windows-build/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
