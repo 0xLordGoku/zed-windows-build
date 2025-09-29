@@ -4,7 +4,8 @@ on: [push, workflow_dispatch]
 # === FIX: ADD PERMISSIONS BLOCK ===
 permissions:
   issues: write
-  contents: read # Good practice to keep for actions/checkout
+  contents: write  # Added for creating releases
+  # Good practice to keep for actions/checkout
 
 # === BUILD CONFIGURATION ===
 env:
@@ -13,8 +14,101 @@ env:
   BUILD_TYPE: "tag"           # Can be: "branch" or "tag"
 
 jobs:
+  # === TEST JOB: Quick release test with text file ===
+  test-release:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Create test file
+      run: |
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $content = @"
+        Test Release Upload
+        ===================
+        Timestamp: $timestamp
+        Build Target: $env:BUILD_TARGET
+        Build Type: $env:BUILD_TYPE
+        Workflow Run: ${{ github.run_number }}
+        
+        This is a test file to verify GitHub release creation works.
+        "@
+        
+        Set-Content -Path "test-release.txt" -Value $content
+        Write-Host "Test file created:"
+        Get-Content "test-release.txt"
+      env:
+        BUILD_TARGET: ${{ env.BUILD_TARGET }}
+        BUILD_TYPE: ${{ env.BUILD_TYPE }}
+    
+    - name: Create GitHub Release with Test File
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          
+          try {
+            // Generate unique tag name
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const tagName = `test-release-${timestamp}`;
+            const releaseName = `Test Release - ${timestamp}`;
+            
+            console.log(`Creating release with tag: ${tagName}`);
+            
+            // Step 1: Create the release
+            const createReleaseResponse = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+              name: releaseName,
+              body: `## 🧪 Test Release\n\nThis is a test release to verify the upload functionality.\n\n**Build Target:** \`${{ env.BUILD_TARGET }}\`\n**Build Type:** \`${{ env.BUILD_TYPE }}\`\n**Workflow Run:** #${{ github.run_number }}`,
+              draft: false,
+              prerelease: true
+            });
+            
+            console.log(`Release created successfully. ID: ${createReleaseResponse.data.id}`);
+            console.log(`Release URL: ${createReleaseResponse.data.html_url}`);
+            
+            const releaseId = createReleaseResponse.data.id;
+            const uploadUrl = createReleaseResponse.data.upload_url;
+            
+            // Step 2: Read the test file
+            const filePath = 'test-release.txt';
+            const fileContent = fs.readFileSync(filePath);
+            const fileName = path.basename(filePath);
+            
+            console.log(`Uploading asset: ${fileName}`);
+            
+            // Step 3: Upload the asset
+            const uploadResponse = await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              name: fileName,
+              data: fileContent
+            });
+            
+            console.log(`Asset uploaded successfully!`);
+            console.log(`Download URL: ${uploadResponse.data.browser_download_url}`);
+            
+            // Output summary
+            core.summary
+              .addHeading('✅ Test Release Created Successfully')
+              .addLink('View Release', createReleaseResponse.data.html_url)
+              .addLink('Download Test File', uploadResponse.data.browser_download_url)
+              .write();
+            
+          } catch (error) {
+            console.error('Failed to create release:', error);
+            core.setFailed(`Release creation failed: ${error.message}`);
+          }
+
+  # === MAIN BUILD JOB ===
   build:
     runs-on: windows-latest
+    needs: test-release  # Only run if test-release succeeds
     steps:
     - name: Enable Long Path Support
       run: |
@@ -171,65 +265,26 @@ jobs:
               Write-Log "Version: $version"
               Write-Log "Commit: $currentCommitShort"
               
-              # Upload to Bashupload
-              Write-Log "=== Uploading executable to Bashupload... ==="
-              $bashUploadLink = "Upload failed. See logs for details."
-              try {
-                $uploadResponse = & curl.exe -s -T $exePath "bashupload.com"
-                $download_link = $uploadResponse | Select-String -Pattern "http" | ForEach-Object { ($_ -split '\s+')[1] } | Select-Object -First 1
-                if ($download_link -and $download_link.StartsWith("http")) {
-                  Write-Log "=== BASHUPLOAD SUCCESSFUL ==="
-                  Write-Log "Download link: $download_link"
-                  $bashUploadLink = $download_link
-                } else {
-                  Write-Log "=== BASHUPLOAD FAILED ==="
-                  Write-Log "Could not parse download link from response."
-                }
-              } catch {
-                Write-Log "=== BASHUPLOAD ERROR ==="
-                Write-Log "Exception: $($_.Exception.Message)"
-              }
-              echo "download_link=$bashUploadLink" >> $env:GITHUB_OUTPUT
+              # Copy to workspace root for easier access
+              Copy-Item $exePath -Destination "$env:GITHUB_WORKSPACE\zed.exe"
+              Write-Log "Copied zed.exe to workspace root"
+              
+              echo "build_success=true" >> $env:GITHUB_OUTPUT
               echo "file_size=$fileSizeMb MB" >> $env:GITHUB_OUTPUT
               echo "build_duration=$($buildDuration.ToString('hh\:mm\:ss'))" >> $env:GITHUB_OUTPUT
-              
-              # Upload to Filebin
-              Write-Log "=== Uploading executable to Filebin... ==="
-              $filebinLinkOutput = "Upload failed. See logs for details."
-              $filebinBinOutput = "N/A"
-              try {
-                $filebinBin = [Guid]::NewGuid().ToString("n")
-                $filebinFileName = "zed-$currentCommitShort.exe"
-                $filebinUrl = "https://filebin.net/$filebinBin/$filebinFileName"
-                Write-Log "Attempting filebin upload to: $filebinUrl"
-                $statusCode = & curl.exe -s -o nul -w "%{http_code}" -T $exePath $filebinUrl
-                Write-Log "Filebin response status code: $statusCode"
-                Write-Log "Curl exit code: $LASTEXITCODE"
-                if ($LASTEXITCODE -eq 0 -and ($statusCode -eq "201" -or $statusCode -eq "200")) {
-                  Write-Log "=== FILEBIN UPLOAD SUCCESSFUL ==="
-                  Write-Log "Filebin link: $filebinUrl"
-                  $filebinLinkOutput = $filebinUrl
-                  $filebinBinOutput = $filebinBin
-                } else {
-                  Write-Log "=== FILEBIN UPLOAD FAILED ==="
-                  Write-Log "Status code: $statusCode, Exit code: $LASTEXITCODE"
-                }
-              } catch {
-                Write-Log "=== FILEBIN UPLOAD ERROR ==="
-                Write-Log "Exception: $($_.Exception.Message)"
-              }
-              echo "filebin_link=$filebinLinkOutput" >> $env:GITHUB_OUTPUT
-              echo "filebin_bin=$filebinBinOutput" >> $env:GITHUB_OUTPUT
               
             } else {
               Write-Log "=== BUILD FAILED ==="
               Write-Log "ERROR: Could not find Zed executable after build"
+              echo "build_success=false" >> $env:GITHUB_OUTPUT
             }
           } else {
             Write-Log "ERROR: Failed to clone Zed repository"
+            echo "build_success=false" >> $env:GITHUB_OUTPUT
           }
         } catch {
           Write-Log "ERROR: Exception occurred: $($_.Exception.Message)"
+          echo "build_success=false" >> $env:GITHUB_OUTPUT
         }
         
         Write-Log "=== Build Process Script Completed ==="
@@ -237,16 +292,117 @@ jobs:
         BUILD_TARGET: ${{ env.BUILD_TARGET }}
         BUILD_TYPE: ${{ env.BUILD_TYPE }}
     
-    # Create GitHub Issue with download link
-    - name: Create Issue with Download Link
+    # Create GitHub Release with zed.exe
+    - name: Create GitHub Release with Zed.exe
+      if: steps.build.outputs.build_success == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          
+          try {
+            const zedVersion = '${{ steps.build.outputs.zed_version }}';
+            const commitHash = '${{ steps.build.outputs.commit_hash }}';
+            const buildTarget = '${{ steps.build.outputs.build_target }}';
+            const buildDuration = '${{ steps.build.outputs.build_duration }}';
+            const fileSize = '${{ steps.build.outputs.file_size }}';
+            
+            // Generate release tag name
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const tagName = `zed-${buildTarget}-${commitHash}-${timestamp}`;
+            const releaseName = `Zed Editor ${zedVersion} - ${buildTarget}`;
+            
+            console.log(`Creating release with tag: ${tagName}`);
+            
+            // Step 1: Create the release
+            const releaseBody = [
+              '## 🔨 Zed Editor Build',
+              '',
+              '**🏷️ Version:** `' + zedVersion + '`',
+              '**🎯 Target:** `' + buildTarget + '`',
+              '**📝 Commit:** `' + commitHash + '`',
+              '**⏱️ Build Duration:** `' + buildDuration + '`',
+              '**📦 File Size:** `' + fileSize + '`',
+              '',
+              '### 📥 Download',
+              'Download the `zed.exe` asset below.',
+              '',
+              '---',
+              '*Built automatically via GitHub Actions*'
+            ].join('\n');
+            
+            const createReleaseResponse = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+              name: releaseName,
+              body: releaseBody,
+              draft: false,
+              prerelease: true
+            });
+            
+            console.log(`Release created successfully. ID: ${createReleaseResponse.data.id}`);
+            console.log(`Release URL: ${createReleaseResponse.data.html_url}`);
+            
+            const releaseId = createReleaseResponse.data.id;
+            
+            // Step 2: Read zed.exe
+            const filePath = path.join(process.env.GITHUB_WORKSPACE, 'zed.exe');
+            console.log(`Reading file from: ${filePath}`);
+            
+            if (!fs.existsSync(filePath)) {
+              throw new Error(`zed.exe not found at ${filePath}`);
+            }
+            
+            const fileContent = fs.readFileSync(filePath);
+            const fileName = `zed-${zedVersion}-${commitHash}.exe`;
+            
+            console.log(`Uploading asset: ${fileName} (${fileContent.length} bytes)`);
+            
+            // Step 3: Upload the asset
+            const uploadResponse = await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              name: fileName,
+              data: fileContent
+            });
+            
+            console.log(`Asset uploaded successfully!`);
+            console.log(`Download URL: ${uploadResponse.data.browser_download_url}`);
+            
+            // Output summary
+            core.summary
+              .addHeading('✅ Zed Build Released Successfully')
+              .addRaw(`**Version:** ${zedVersion}`)
+              .addBreak()
+              .addRaw(`**Commit:** ${commitHash}`)
+              .addBreak()
+              .addRaw(`**Size:** ${fileSize}`)
+              .addBreak()
+              .addRaw(`**Duration:** ${buildDuration}`)
+              .addBreak()
+              .addBreak()
+              .addLink('📦 View Release', createReleaseResponse.data.html_url)
+              .addBreak()
+              .addLink('⬇️ Download Zed.exe', uploadResponse.data.browser_download_url)
+              .write();
+            
+          } catch (error) {
+            console.error('Failed to create release:', error);
+            core.setFailed(`Release creation failed: ${error.message}`);
+          }
+    
+    # Create GitHub Issue (fallback notification)
+    - name: Create Issue with Build Status
       if: always()
       uses: actions/github-script@v7
       with:
         script: |
           try {
             const buildStatus = '${{ job.status }}';
-            const bashuploadLink = '${{ steps.build.outputs.download_link }}' || 'Build failed';
-            const filebinLink = '${{ steps.build.outputs.filebin_link }}' || 'Build failed';
+            const buildSuccess = '${{ steps.build.outputs.build_success }}';
             const fileSize = '${{ steps.build.outputs.file_size }}' || 'Unknown';
             const buildDuration = '${{ steps.build.outputs.build_duration }}' || 'Unknown';
             const zedVersion = '${{ steps.build.outputs.zed_version }}' || 'Unknown';
@@ -254,18 +410,17 @@ jobs:
             const buildTarget = '${{ steps.build.outputs.build_target }}' || '${{ env.BUILD_TARGET }}';
             
             const issueBody = [
-              '## 🔨 Zed Editor Build Complete',
+              '## 🔨 Zed Editor Build Status',
               '',
-              '**📋 Build Status:** `' + buildStatus + '`',
+              '**📋 Status:** `' + buildStatus + '`',
+              '**✅ Build Success:** `' + buildSuccess + '`',
               '**🏷️ Version:** `' + zedVersion + '`', 
               '**🎯 Target:** `' + buildTarget + '`',
+              '**📝 Commit:** `' + commitHash + '`',
               '**⏱️ Duration:** `' + buildDuration + '`',
               '**📦 Size:** `' + fileSize + '`',
               '',
-              '### 📥 Download Links',
-              '',
-              '- **Bashupload:** ' + bashuploadLink,
-              '- **Filebin:** ' + filebinLink,
+              buildSuccess === 'true' ? '### 📥 Download\nCheck the [Releases page](../../releases) for the build artifact.' : '### ❌ Build Failed\nCheck the workflow logs for details.',
               '',
               '---',
               '*Build completed automatically via GitHub Actions*'
