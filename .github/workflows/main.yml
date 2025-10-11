@@ -8,7 +8,7 @@ permissions:
 # === BUILD CONFIGURATION ===
 env:
   # Change these variables to build from different branch/tag
-  BUILD_TARGET: "v0.207.3"           # Can be: branch name, tag name, or commit hash
+  BUILD_TARGET: "v0.207.4"           # Can be: branch name, tag name, or commit hash
   BUILD_TYPE: "tag"           # Can be: "branch" or "tag"
 
 jobs:
