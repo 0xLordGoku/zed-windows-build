@@ -1,58 +1,36 @@
 name: Cloud Phone CI
-on: [workflow_dispatch] # Manual trigger only
+on: [workflow_dispatch]
 
 jobs:
   cloud-phone:
-    runs-on: ubuntu-latest # MUST be Ubuntu, not Windows
+    runs-on: macos-latest # <--- CRITICAL CHANGE
     steps:
-    # 1. Setup Ngrok (Your tunnel)
+    # 1. Setup Ngrok
     - name: Download ngrok
       run: |
-        wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-        tar -xvzf ngrok-v3-stable-linux-amd64.tgz
+        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
+        unzip ngrok-v3-stable-darwin-amd64.zip
         chmod +x ngrok
         
     - name: Auth ngrok
       run: ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
 
-    # 2. Install & Run Redroid (The Phone)
-    # Note: Redroid often fails on standard GH runners due to missing kernel modules.
-    # If this fails, we use the standard emulator in step 3.
-    - name: Try Starting Redroid
-      continue-on-error: true
-      run: |
-        # Attempt to load modules if available (often fails on shared runners)
-        sudo modprobe binder_linux devices=binder,hwbinder,vndbinder || true
-        
-        # Run the container
-        docker run -d -p 5555:5555 \
-          --privileged \
-          redroid/redroid:11.0.0-latest
-
-    # 3. Alternative: Standard Android Emulator (Slower but Guaranteed to Work)
-    - name: Enable KVM
-      run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
-
+    # 2. Run Android Emulator (Hardware Accelerated)
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 29
+        api-level: 28 # older = faster/lighter
         target: default
         arch: x86_64
-        profile: Nexus 6
+        profile: Nexus 5 # smaller screen = less RAM
+        ram-size: 2048M
+        # IMPORTANT: macOS uses 'host' gpu for speed
+        emulator-options: -no-window -gpu host -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
         script: |
-          # This script runs INSIDE the emulator step
           echo "Emulator is running!"
-          
-          # Start ADB server
           adb devices
-          
-          # Start the tunnel for ADB (Port 5555)
-          # You will connect to this from your PC using: adb connect tcp://0.tcp.ngrok.io:12345
-          ../ngrok tcp 5555 &
-          
-          # Keep it alive for 6 hours (GitHub limit)
+          # Start tunnel. 
+          # Connect from your PC with: adb connect 0.tcp.ngrok.io:xxxxx
+          ./ngrok tcp 5555 &
           sleep 21600
