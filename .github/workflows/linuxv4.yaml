@@ -14,11 +14,15 @@ jobs:
         mkdir -p apks
         
         echo "Downloading Clash of Clans..."
-        # Try APKPure, fallback to APKCombo, fallback to echo error
-        wget -q "https://d.apkpure.com/b/APK/com.supercell.clashofclans?version=latest" -O apks/clash-of-clans.apk || \
-        curl -L "https://apkcombo.com/clash-of-clans/com.supercell.clashofclans/download/apk" -o apks/clash-of-clans.apk || \
-        echo "Failed to download Clash of Clans"
         
+        # -------------------------------------------------------
+        # FIX: Using the direct signed link (quoted to prevent errors)
+        # Note: This link expires in ~4 hours. For a permanent fix, 
+        # upload this APK to your GitHub Releases and link it here.
+        # -------------------------------------------------------
+        wget -O apks/clash-of-clans.apk 'https://apks.39b7cb94d40914bac590886981b0ed6e.r2.cloudflarestorage.com/com.supercell.clashofclans/18.0.2/180000003.950a41404354260cc91207fd381da4ddeb31b6a5.apk?response-content-disposition=attachment%3B%20filename%3D%22Clash%20of%20Clans_18.0.2_apkcombo.com.apk%22&response-content-type=application%2Fvnd.android.package-archive&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20251123T190414Z&X-Amz-SignedHeaders=host&X-Amz-Expires=14400&X-Amz-Credential=3cb727b4cd4780c410b780ac7caa4da3%2F20251123%2Fauto%2Fs3%2Faws4_request&X-Amz-Signature=63ec76ad14ef55ceb47dd8ed3645cabed7fad907991e667b55d93854f1d85690'
+        
+        # Verify file size (should be ~300MB+, not 10KB)
         ls -lh apks/
       
     - name: Enable KVM group perms
@@ -42,9 +46,6 @@ jobs:
         distribution: 'zulu'
         java-version: '17'
 
-    # -------------------------------------------------------
-    # FIX: Create the script file here to avoid syntax errors
-    # -------------------------------------------------------
     - name: Create Logic Script
       run: |
         cat << 'EOF' > emulator_script.sh
@@ -65,7 +66,7 @@ jobs:
         echo ""
         echo "📦 Installing applications..."
         
-        # Check if APKs exist and install them
+        # Install all APKs found in the folder
         if compgen -G "apks/*.apk" > /dev/null; then
           for apk in apks/*.apk; do
             echo "Installing $(basename "$apk")..."
@@ -121,7 +122,6 @@ jobs:
         kill $NGROK_PID 2>/dev/null || true
         EOF
         
-        # Make the script executable
         chmod +x emulator_script.sh
 
     - name: Run Android Emulator
@@ -140,5 +140,4 @@ jobs:
         disable-spellchecker: true
         disable-linux-hw-accel: false
         emulator-boot-timeout: 600
-        # Simply run the script file we created above
         script: ./emulator_script.sh
