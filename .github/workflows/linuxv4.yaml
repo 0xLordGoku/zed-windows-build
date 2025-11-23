@@ -50,19 +50,19 @@ jobs:
     - name: Run Android Emulator with Screen Access
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 30                    # Android 11 (better performance than 14)
-        target: google_apis              # Includes Google Play Services
+        api-level: 30
+        target: google_apis
         arch: x86_64
-        profile: pixel_3a                # Lighter device profile
-        ram-size: 3072M                  # 3GB RAM (sweet spot)
-        heap-size: 512M                  # Reduced heap
-        disk-size: 6144M                 # 6GB disk
-        cores: 4                         # Use 4 CPU cores
+        profile: pixel_3a
+        ram-size: 3072M
+        heap-size: 512M
+        disk-size: 6144M
+        cores: 4
         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -skin 720x1280 -qemu -smp 4
         disable-animations: true
         disable-spellchecker: true
-        disable-linux-hw-accel: false    # Enable KVM hardware acceleration
-        emulator-boot-timeout: 600       # 10 minutes
+        disable-linux-hw-accel: false
+        emulator-boot-timeout: 600
         script: |
           echo "============================================"
           echo "🚀 Setting up Android Emulator..."
@@ -78,6 +78,7 @@ jobs:
           # Install pre-downloaded APKs
           echo ""
           echo "📦 Installing applications..."
+          
           if ls apks/*.apk 1> /dev/null 2>&1; then
             for apk in apks/*.apk; do
               echo "Installing $(basename $apk)..."
@@ -152,5 +153,4 @@ jobs:
           sleep 21600
           
           echo "Shutting down at: $(date)"
-          kill $NGROK_PID || true
-          kill $KEEPALIVE_PID || true
+          kill $NGROK_PID 2>/dev/null || true
