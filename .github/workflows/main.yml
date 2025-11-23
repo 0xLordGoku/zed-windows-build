@@ -3,36 +3,83 @@ on: [workflow_dispatch]
 
 jobs:
   cloud-phone:
-    runs-on: macos-13     # <--- CRITICAL: Force macOS 13 (Intel), NOT latest (ARM64)
+    runs-on: ubuntu-latest  # Changed to Ubuntu - 2-3x faster & cheaper than macOS
+    
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    # Enable KVM for hardware acceleration on Linux
+    - name: Enable KVM group perms
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+        
     - name: Download ngrok
       run: |
-        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
-        unzip ngrok-v3-stable-darwin-amd64.zip
+        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+        tar xvzf ngrok-v3-stable-linux-amd64.tgz
         chmod +x ngrok
         
     - name: Auth ngrok
       run: ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-
+      
+    # Setup Java (required for Android)
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+    
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 29           # Android 10
-        target: default         # Default is fine for Intel
-        arch: x86_64            # <--- CRITICAL: Match Intel Host
+        api-level: 29
+        target: default
+        arch: x86_64
         profile: Nexus 5
         ram-size: 2048M
-        emulator-options: -no-window -gpu host -noaudio -no-boot-anim -camera-back none
+        heap-size: 512M
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
         disable-animations: true
+        disable-spellchecker: true
+        emulator-boot-timeout: 600  # 10 minutes timeout for boot
         script: |
-          echo "Emulator started!"
+          echo "Emulator started successfully!"
           adb devices
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
           
-          # Start the tunnel
-          ./ngrok tcp 5555 &
+          # Enable TCP/IP mode on port 5555
+          adb tcpip 5555
+          sleep 2
           
-          echo "Tunnel is live. Check Ngrok dashboard for URL."
-          echo "Connect command: adb connect 0.tcp.ngrok.io:XXXXX"
+          # Start ngrok tunnel in background
+          ./ngrok tcp 5555 --log=stdout > ngrok.log &
+          NGROK_PID=$!
           
-          # Keep alive
-          sleep 21600
+          echo "Waiting for ngrok to start..."
+          sleep 5
+          
+          # Get ngrok public URL
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"tcp://[^"]*' | cut -d'"' -f4 | sed 's/tcp:\/\///')
+          
+          echo "============================================"
+          echo "🎉 EMULATOR IS READY!"
+          echo "============================================"
+          echo "Connect using:"
+          echo "  adb connect $NGROK_URL"
+          echo "============================================"
+          echo ""
+          echo "Ngrok dashboard: http://localhost:4040"
+          echo ""
+          echo "Keeping connection alive for 6 hours..."
+          echo "============================================"
+          
+          # Keep the workflow alive
+          sleep 21600  # 6 hours
+          
+          # Cleanup
+          kill $NGROK_PID || true
