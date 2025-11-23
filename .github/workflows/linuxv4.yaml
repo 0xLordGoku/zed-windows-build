@@ -1,4 +1,4 @@
-name: Cloud Phone CI with Screen Access
+name: Android 11 with coc
 on: [workflow_dispatch]
 
 jobs:
