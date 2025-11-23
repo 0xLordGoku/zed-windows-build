@@ -78,19 +78,17 @@ jobs:
           # Install pre-downloaded APKs
           echo ""
           echo "📦 Installing applications..."
-          
-          if [ -d "apks" ] && [ "$(ls -A apks/*.apk 2>/dev/null)" ]; then
+          if ls apks/*.apk 1> /dev/null 2>&1; then
             for apk in apks/*.apk; do
               echo "Installing $(basename $apk)..."
-              adb install -r "$apk" && echo "✅ Installed $(basename $apk)" || echo "❌ Failed to install $(basename $apk)"
+              adb install -r "$apk" && echo "✅ Installed" || echo "❌ Failed"
             done
+            echo ""
+            echo "Installed apps:"
+            adb shell pm list packages -3
           else
-            echo "No APKs found to install"
+            echo "No APKs found to install (this is normal if you haven't added any)"
           fi
-          
-          echo ""
-          echo "Installed apps:"
-          adb shell pm list packages -3
           
           # Enable TCP/IP mode on port 5555
           echo ""
