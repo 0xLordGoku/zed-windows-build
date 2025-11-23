@@ -3,7 +3,7 @@ on: [workflow_dispatch]
 
 jobs:
   cloud-phone:
-    runs-on: macos-latest # This is an ARM64 (Apple Silicon) runner
+    runs-on: macos-latest
     steps:
     - name: Download ngrok
       run: |
@@ -17,10 +17,10 @@ jobs:
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 30           # API 30+ has better ARM64 support
-        target: google_apis     # 'default' often lacks ARM64 images, use 'google_apis'
-        arch: arm64-v8a         # <--- CRITICAL FIX: Match host architecture
-        profile: Pixel 4        # Pixel profiles work well with ARM64
+        api-level: 30
+        target: google_apis
+        arch: arm64-v8a
+        profile: Nexus 5          # <--- CHANGED: "Pixel 4" -> "Nexus 5" (Standard profile)
         ram-size: 2048M
         emulator-options: -no-window -gpu host -noaudio -no-boot-anim -camera-back none
         disable-animations: true
