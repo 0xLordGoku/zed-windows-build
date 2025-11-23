@@ -1,0 +1,126 @@
+name: Cloud Phone CI with Screen Access
+on: [workflow_dispatch]
+
+jobs:
+  cloud-phone:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    # Enable KVM for hardware acceleration
+    - name: Enable KVM group perms
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+        
+    - name: Install VNC and noVNC
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y x11vnc websockify python3-numpy
+        
+    - name: Download ngrok
+      run: |
+        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+        tar xvzf ngrok-v3-stable-linux-amd64.tgz
+        chmod +x ngrok
+        
+    - name: Auth ngrok
+      run: ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+    
+    - name: Run Android Emulator with Screen Access
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 29
+        target: default
+        arch: x86_64
+        profile: Nexus 5
+        ram-size: 2048M
+        heap-size: 512M
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
+        disable-spellchecker: true
+        emulator-boot-timeout: 600
+        script: |
+          echo "Emulator started successfully!"
+          adb devices
+          
+          # Disable animations
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          
+          # Enable TCP/IP mode on port 5555
+          adb tcpip 5555
+          sleep 3
+          
+          # Install and setup scrcpy server
+          echo "Setting up scrcpy for screen mirroring..."
+          
+          # Download scrcpy server
+          wget -q https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4 -O scrcpy-server.jar
+          
+          # Push scrcpy server to device
+          adb push scrcpy-server.jar /data/local/tmp/scrcpy-server.jar
+          
+          # Start scrcpy server on device (runs on port 27183 by default)
+          adb shell "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 2.4 log_level=info control=false" &
+          
+          sleep 3
+          
+          # Forward scrcpy port
+          adb forward tcp:27183 tcp:27183
+          
+          # Start ngrok tunnels
+          echo "Starting ngrok tunnels..."
+          
+          # Tunnel for ADB
+          ./ngrok tcp 5555 --log=stdout > ngrok-adb.log &
+          
+          # Tunnel for scrcpy
+          ./ngrok tcp 27183 --log=stdout > ngrok-scrcpy.log &
+          
+          sleep 10
+          
+          # Get ngrok URLs
+          echo "============================================"
+          echo "🎉 EMULATOR IS READY WITH SCREEN ACCESS!"
+          echo "============================================"
+          
+          NGROK_DATA=$(curl -s http://localhost:4040/api/tunnels)
+          
+          ADB_URL=$(echo "$NGROK_DATA" | jq -r '.tunnels[] | select(.config.addr | contains("5555")) | .public_url' | sed 's/tcp:\/\///')
+          SCRCPY_URL=$(echo "$NGROK_DATA" | jq -r '.tunnels[] | select(.config.addr | contains("27183")) | .public_url' | sed 's/tcp:\/\///')
+          
+          echo ""
+          echo "📱 ADB Connection:"
+          echo "  adb connect $ADB_URL"
+          echo ""
+          echo "🖥️  Screen Mirroring (scrcpy):"
+          echo "  scrcpy --serial=$ADB_URL --no-audio"
+          echo ""
+          echo "Alternative: Use port forwarding after ADB connect:"
+          echo "  adb connect $ADB_URL"
+          echo "  adb forward tcp:27183 tcp:27183"
+          echo "  scrcpy --serial=$ADB_URL"
+          echo ""
+          echo "============================================"
+          echo "Ngrok Dashboard: http://localhost:4040"
+          echo "============================================"
+          echo ""
+          echo "⏰ Keeping connection alive for 6 hours..."
+          echo "   Started at: $(date)"
+          echo ""
+          
+          # Keep alive
+          sleep 21600
+          
+          echo "Shutting down..."
