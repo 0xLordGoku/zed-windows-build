@@ -3,34 +3,36 @@ on: [workflow_dispatch]
 
 jobs:
   cloud-phone:
-    runs-on: macos-latest # <--- CRITICAL CHANGE
+    runs-on: macos-latest # This is an ARM64 (Apple Silicon) runner
     steps:
-    # 1. Setup Ngrok
     - name: Download ngrok
       run: |
-        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
-        unzip ngrok-v3-stable-darwin-amd64.zip
+        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-arm64.zip
+        unzip ngrok-v3-stable-darwin-arm64.zip
         chmod +x ngrok
         
     - name: Auth ngrok
       run: ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
 
-    # 2. Run Android Emulator (Hardware Accelerated)
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 28 # older = faster/lighter
-        target: default
-        arch: x86_64
-        profile: Nexus 5 # smaller screen = less RAM
+        api-level: 30           # API 30+ has better ARM64 support
+        target: google_apis     # 'default' often lacks ARM64 images, use 'google_apis'
+        arch: arm64-v8a         # <--- CRITICAL FIX: Match host architecture
+        profile: Pixel 4        # Pixel profiles work well with ARM64
         ram-size: 2048M
-        # IMPORTANT: macOS uses 'host' gpu for speed
         emulator-options: -no-window -gpu host -noaudio -no-boot-anim -camera-back none
         disable-animations: true
         script: |
-          echo "Emulator is running!"
+          echo "Emulator started!"
           adb devices
-          # Start tunnel. 
-          # Connect from your PC with: adb connect 0.tcp.ngrok.io:xxxxx
+          
+          # Start the tunnel
           ./ngrok tcp 5555 &
+          
+          echo "Tunnel is live. Check your Ngrok dashboard for the URL."
+          echo "Connect using: adb connect 0.tcp.ngrok.io:XXXXX"
+          
+          # Keep alive for 6 hours
           sleep 21600
