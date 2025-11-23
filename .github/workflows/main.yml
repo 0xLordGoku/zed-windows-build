@@ -3,12 +3,12 @@ on: [workflow_dispatch]
 
 jobs:
   cloud-phone:
-    runs-on: macos-latest
+    runs-on: macos-13     # <--- CRITICAL: Force macOS 13 (Intel), NOT latest (ARM64)
     steps:
     - name: Download ngrok
       run: |
-        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-arm64.zip
-        unzip ngrok-v3-stable-darwin-arm64.zip
+        curl -O https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip
+        unzip ngrok-v3-stable-darwin-amd64.zip
         chmod +x ngrok
         
     - name: Auth ngrok
@@ -17,10 +17,10 @@ jobs:
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 30
-        target: google_apis
-        arch: arm64-v8a
-        profile: Nexus 5          # <--- CHANGED: "Pixel 4" -> "Nexus 5" (Standard profile)
+        api-level: 29           # Android 10
+        target: default         # Default is fine for Intel
+        arch: x86_64            # <--- CRITICAL: Match Intel Host
+        profile: Nexus 5
         ram-size: 2048M
         emulator-options: -no-window -gpu host -noaudio -no-boot-anim -camera-back none
         disable-animations: true
@@ -31,8 +31,8 @@ jobs:
           # Start the tunnel
           ./ngrok tcp 5555 &
           
-          echo "Tunnel is live. Check your Ngrok dashboard for the URL."
-          echo "Connect using: adb connect 0.tcp.ngrok.io:XXXXX"
+          echo "Tunnel is live. Check Ngrok dashboard for URL."
+          echo "Connect command: adb connect 0.tcp.ngrok.io:XXXXX"
           
-          # Keep alive for 6 hours
+          # Keep alive
           sleep 21600
