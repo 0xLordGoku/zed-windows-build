@@ -1,4 +1,4 @@
-name: Android 11 with coc
+name: Android 11
 on: [workflow_dispatch]
 
 jobs:
