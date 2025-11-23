@@ -13,19 +13,14 @@ jobs:
       run: |
         mkdir -p apks
         
-        # Download Clash of Clans APK (using APKPure mirror)
         echo "Downloading Clash of Clans..."
+        # Try APKPure, fallback to APKCombo, fallback to echo error
         wget -q "https://d.apkpure.com/b/APK/com.supercell.clashofclans?version=latest" -O apks/clash-of-clans.apk || \
         curl -L "https://apkcombo.com/clash-of-clans/com.supercell.clashofclans/download/apk" -o apks/clash-of-clans.apk || \
         echo "Failed to download Clash of Clans"
         
-        # Add more apps here (examples):
-        # wget -q "https://f-droid.org/repo/org.fdroid.fdroid_1016053.apk" -O apks/fdroid.apk
-        # wget -q "https://github.com/you/your-app/releases/download/v1.0/app.apk" -O apks/your-app.apk
-        
         ls -lh apks/
       
-    # Enable KVM for hardware acceleration
     - name: Enable KVM group perms
       run: |
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -46,8 +41,90 @@ jobs:
       with:
         distribution: 'zulu'
         java-version: '17'
-    
-    - name: Run Android Emulator with Screen Access
+
+    # -------------------------------------------------------
+    # FIX: Create the script file here to avoid syntax errors
+    # -------------------------------------------------------
+    - name: Create Logic Script
+      run: |
+        cat << 'EOF' > emulator_script.sh
+        #!/bin/bash
+        set -e
+        
+        echo "============================================"
+        echo "🚀 Setting up Android Emulator..."
+        echo "============================================"
+        
+        adb devices
+        
+        # Disable animations for better performance
+        adb shell settings put global window_animation_scale 0
+        adb shell settings put global transition_animation_scale 0
+        adb shell settings put global animator_duration_scale 0
+        
+        echo ""
+        echo "📦 Installing applications..."
+        
+        # Check if APKs exist and install them
+        if compgen -G "apks/*.apk" > /dev/null; then
+          for apk in apks/*.apk; do
+            echo "Installing $(basename "$apk")..."
+            adb install -r "$apk" && echo "✅ Installed" || echo "❌ Failed"
+          done
+          echo ""
+          echo "Installed apps:"
+          adb shell pm list packages -3
+        else
+          echo "No APKs found to install."
+        fi
+        
+        # Enable TCP/IP mode on port 5555
+        echo ""
+        echo "Enabling ADB over TCP/IP..."
+        adb tcpip 5555
+        sleep 3
+        
+        # Download and setup scrcpy server
+        echo "Setting up scrcpy server for screen mirroring..."
+        wget -q https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4 -O scrcpy-server.jar
+        adb push scrcpy-server.jar /data/local/tmp/scrcpy-server.jar
+        
+        # Start ngrok tunnel
+        echo "Starting ngrok tunnel..."
+        ./ngrok tcp 5555 --log=stdout > ngrok.log &
+        NGROK_PID=$!
+        
+        sleep 8
+        
+        # Get ngrok URL
+        NGROK_DATA=$(curl -s http://localhost:4040/api/tunnels)
+        ADB_URL=$(echo "$NGROK_DATA" | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
+        
+        echo ""
+        echo "============================================"
+        echo "🎉 EMULATOR IS READY!"
+        echo "============================================"
+        echo ""
+        echo "📱 Step 1: Connect via ADB"
+        echo "  adb connect $ADB_URL"
+        echo ""
+        echo "🖥️  Step 2: Run scrcpy"
+        echo "  scrcpy -s $ADB_URL --max-size 1024 --max-fps 30 --video-bit-rate 2M --no-audio"
+        echo ""
+        echo "⏰ Connection will stay alive for 6 hours"
+        echo ""
+        
+        # Keep the script running
+        sleep 21600
+        
+        echo "Shutting down..."
+        kill $NGROK_PID 2>/dev/null || true
+        EOF
+        
+        # Make the script executable
+        chmod +x emulator_script.sh
+
+    - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
         api-level: 30
@@ -63,94 +140,5 @@ jobs:
         disable-spellchecker: true
         disable-linux-hw-accel: false
         emulator-boot-timeout: 600
-        script: |
-          echo "============================================"
-          echo "🚀 Setting up Android Emulator..."
-          echo "============================================"
-          
-          adb devices
-          
-          # Disable animations for better performance
-          adb shell settings put global window_animation_scale 0
-          adb shell settings put global transition_animation_scale 0
-          adb shell settings put global animator_duration_scale 0
-          
-          # Install pre-downloaded APKs
-          echo ""
-          echo "📦 Installing applications..."
-          
-          if ls apks/*.apk 1> /dev/null 2>&1; then
-            for apk in apks/*.apk; do
-              echo "Installing $(basename $apk)..."
-              adb install -r "$apk" && echo "✅ Installed" || echo "❌ Failed"
-            done
-            echo ""
-            echo "Installed apps:"
-            adb shell pm list packages -3
-          else
-            echo "No APKs found to install (this is normal if you haven't added any)"
-          fi
-          
-          # Enable TCP/IP mode on port 5555
-          echo ""
-          echo "Enabling ADB over TCP/IP..."
-          adb tcpip 5555
-          sleep 3
-          
-          # Download and setup scrcpy server
-          echo "Setting up scrcpy server for screen mirroring..."
-          wget -q https://github.com/Genymobile/scrcpy/releases/download/v2.4/scrcpy-server-v2.4 -O scrcpy-server.jar
-          adb push scrcpy-server.jar /data/local/tmp/scrcpy-server.jar
-          
-          # Start only ONE ngrok tunnel for ADB (port 5555)
-          echo "Starting ngrok tunnel..."
-          ./ngrok tcp 5555 --log=stdout > ngrok.log &
-          NGROK_PID=$!
-          
-          sleep 8
-          
-          # Get ngrok URL
-          NGROK_DATA=$(curl -s http://localhost:4040/api/tunnels)
-          ADB_URL=$(echo "$NGROK_DATA" | jq -r '.tunnels[0].public_url' | sed 's/tcp:\/\///')
-          
-          echo ""
-          echo "============================================"
-          echo "🎉 EMULATOR IS READY!"
-          echo "============================================"
-          echo ""
-          echo "📱 Step 1: Connect via ADB"
-          echo "  adb connect $ADB_URL"
-          echo ""
-          echo "🖥️  Step 2: Run scrcpy to see the screen"
-          echo ""
-          echo "🚀 FASTEST (Recommended - lower quality, faster response):"
-          echo "  scrcpy -s $ADB_URL --max-size 800 --max-fps 15 --video-codec h264 --video-encoder MediaCodec --no-audio"
-          echo ""
-          echo "⚡ BALANCED (Good quality, decent speed):"
-          echo "  scrcpy -s $ADB_URL --max-size 1024 --max-fps 30 --video-bit-rate 2M --no-audio"
-          echo ""
-          echo "🎨 HIGH QUALITY (Slower but better visuals):"
-          echo "  scrcpy -s $ADB_URL --max-size 1920 --max-fps 60 --video-bit-rate 8M"
-          echo ""
-          echo "📸 Take screenshots:"
-          echo "  adb -s $ADB_URL shell screencap -p /sdcard/screen.png"
-          echo "  adb -s $ADB_URL pull /sdcard/screen.png"
-          echo ""
-          echo "============================================"
-          echo "Ngrok Dashboard: http://localhost:4040"
-          echo "============================================"
-          echo ""
-          echo "⏰ Connection will stay alive for 6 hours"
-          echo "   Started at: $(date)"
-          echo ""
-          echo "💡 Tips:"
-          echo "   - If connection drops, just reconnect: adb connect $ADB_URL"
-          echo "   - ADB keepalive is running in background"
-          echo "   - Check ngrok dashboard if issues persist"
-          echo ""
-          
-          # Keep the workflow alive for 6 hours
-          sleep 21600
-          
-          echo "Shutting down at: $(date)"
-          kill $NGROK_PID 2>/dev/null || true
+        # Simply run the script file we created above
+        script: ./emulator_script.sh
