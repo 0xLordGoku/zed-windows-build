@@ -1,0 +1,58 @@
+name: Zed Build CI
+on: [workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  rdp-access:
+    runs-on: windows-latest
+    steps:
+    - name: Enable Long Path Support
+      run: |
+        reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+    
+    - name: Download ngrok
+      run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+    
+    - name: Extract ngrok
+      run: Expand-Archive ngrok.zip
+    
+    - name: Auth ngrok
+      run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
+      env:
+        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+    
+    - name: Enable TS
+      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+    
+    - name: Allow RDP Through Firewall
+      run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+    
+    - name: Require NLA
+      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+    
+    - name: Reset runneradmin Password
+      run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
+    
+    - name: Create RDP Tunnel
+      run: |
+        # Start ngrok tunnel
+        Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp", "3389" -WindowStyle Hidden
+        Start-Sleep -Seconds 10
+        Write-Host "RDP tunnel is now available!"
+        Write-Host "Check ngrok dashboard for connection details: https://dashboard.ngrok.com/endpoints/status"
+        
+        # Keep the session alive
+        Write-Host "Keeping session alive. Press Ctrl+C in GitHub Actions to stop."
+        while ($true) {
+          Start-Sleep -Seconds 300
+          Write-Host "Session still active... $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        }
+    
+    - name: Stop RDP Tunnel
+      if: always()
+      run: |
+        Write-Host "Closing RDP tunnel..."
+        Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue
+        Write-Host "RDP tunnel closed."
